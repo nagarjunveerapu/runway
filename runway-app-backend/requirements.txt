@@ -1,0 +1,42 @@
+# Core Dependencies
+pandas==2.0.3
+numpy==1.24.3
+python-dotenv==1.0.0
+
+# PDF Parsing
+pdfplumber==0.10.3
+
+# Fuzzy Matching
+rapidfuzz==3.5.2
+
+# Machine Learning
+scikit-learn==1.3.2
+joblib==1.3.2
+
+# Database
+sqlalchemy==2.0.23
+
+# Encryption
+cryptography==41.0.7
+
+# CLI
+click==8.1.7
+
+# Testing
+pytest==7.4.3
+
+# API
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic==2.5.0
+python-multipart==0.0.6
+pyjwt==2.8.0
+bcrypt==4.0.1
+
+# Optional (for development)
+streamlit==1.28.0
+
+# Optional Advanced Features (commented out by default)
+# camelot-py[cv]==0.11.0  # Requires Ghostscript
+# tabula-py==2.8.2  # Requires Java
+# pytesseract==0.3.10  # Requires Tesseract OCR

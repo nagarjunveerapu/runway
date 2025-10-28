@@ -1,0 +1,393 @@
+# Personal Finance App - Getting Started
+
+## What We Built 🚀
+
+A production-ready personal finance application with:
+
+✅ **PDF & CSV Statement Parsing** - Multi-strategy fallback parsing
+✅ **Canonical Transaction Schema** - Single source of truth
+✅ **Merchant Mapping** - Fuzzy matching with 100+ default merchants
+✅ **Privacy Vault** - AES-256-GCM encryption for PII
+✅ **ML Categorization** - TF-IDF + Random Forest classifier
+✅ **Deduplication** - Explicit rules (±1 day, 85% fuzzy, exact amount)
+✅ **SQLite/PostgreSQL Storage** - SQLAlchemy ORM
+✅ **CLI Interface** - Click-based commands
+✅ **Structured Logging** - JSON logs with rotation
+✅ **Configuration Management** - python-dotenv with secrets protection
+
+## Quick Start
+
+### 1. Install Dependencies
+
+```bash
+pip install -r requirements.txt
+```
+
+### 2. Set Up Configuration
+
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit with your settings (optional - defaults work fine)
+nano .env
+
+# Set file permissions
+chmod 600 .env
+```
+
+### 3. Initialize Database
+
+```bash
+python3 finance.py init-db
+```
+
+### 4. Train ML Model (Optional)
+
+```bash
+python3 finance.py train ml/training_data/labeled_transactions.jsonl --cv
+```
+
+### 5. Ingest Your First Statement
+
+```bash
+# CSV format
+python3 finance.py ingest data/raw/sample_statement.csv --bank="HDFC Bank"
+
+# PDF format (once you have PDF statements)
+python3 finance.py ingest statements/my_statement.pdf --bank="ICICI Bank"
+```
+
+### 6. View Transactions
+
+```bash
+# List recent transactions
+python3 finance.py list --limit=20
+
+# Filter by date range
+python3 finance.py list --start-date=2024-10-01 --end-date=2024-10-31
+
+# Filter by category
+python3 finance.py list --category="Food & Dining"
+
+# View summary statistics
+python3 finance.py summary
+```
+
+## Project Structure
+
+```
+run_poc/
+├── finance.py              # Main CLI entry point
+├── config.py               # Configuration management
+├── schema.py               # Canonical transaction schema
+│
+├── ingestion/              # Statement parsing
+│   ├── pdf_parser.py       # PDF parser (multi-strategy)
+│   ├── csv_parser.py       # CSV parser
+│   └── normalizer.py       # Normalize to canonical schema
+│
+├── mapping/                # Merchant mapping
+│   ├── merchant_mapper.py  # Fuzzy merchant matching
+│   └── editor.py           # Merchant mapping CLI tools
+│
+├── privacy/                # PII encryption
+│   └── vault.py            # AES-256-GCM vault
+│
+├── ml/                     # Machine learning
+│   ├── categorizer.py      # Transaction categorization
+│   ├── models/             # Trained models
+│   └── training_data/      # Labeled data for training
+│
+├── storage/                # Database layer
+│   ├── models.py           # SQLAlchemy models
+│   └── database.py         # Database manager
+│
+├── deduplication/          # Deduplication logic
+│   └── detector.py         # Duplicate detection with fuzzy matching
+│
+├── cli/                    # Command-line interface
+│   └── finance_cli.py      # Click commands
+│
+├── data/                   # Data storage
+│   ├── raw/                # Raw statements
+│   ├── processed/          # Processed data
+│   └── finance.db          # SQLite database
+│
+└── logs/                   # Application logs
+    └── app.log             # Main log file
+```
+
+## CLI Commands
+
+### Ingest Statement
+```bash
+finance.py ingest <file_path> [OPTIONS]
+
+Options:
+  --source [pdf|csv]      File type (auto-detected if not specified)
+  --bank TEXT             Bank name
+  --account-id TEXT       Account ID
+  --skip-dedup            Skip deduplication
+  --skip-ml               Skip ML categorization
+```
+
+### List Transactions
+```bash
+finance.py list [OPTIONS]
+
+Options:
+  --start-date TEXT       Start date (YYYY-MM-DD)
+  --end-date TEXT         End date (YYYY-MM-DD)
+  --category TEXT         Filter by category
+  --limit INTEGER         Number of results (default: 20)
+  --format [table|json]   Output format (default: table)
+```
+
+### Show Summary
+```bash
+finance.py summary [OPTIONS]
+
+Options:
+  --start-date TEXT       Start date (YYYY-MM-DD)
+  --end-date TEXT         End date (YYYY-MM-DD)
+```
+
+### Train ML Model
+```bash
+finance.py train <training_data_file> [OPTIONS]
+
+Options:
+  --test-size FLOAT       Test set fraction (default: 0.2)
+  --cv                    Use cross-validation
+```
+
+### Other Commands
+```bash
+finance.py config-info      # Show configuration
+finance.py init-db          # Initialize database
+finance.py --help           # Show all commands
+```
+
+## Configuration Options
+
+Edit `.env` file to customize:
+
+```bash
+# Vault Encryption
+VAULT_KEY=<auto-generated or set your own>
+VAULT_KEY_FILE=.vault_key
+
+# Database
+DATABASE_URL=sqlite:///data/finance.db
+# DATABASE_URL=postgresql://user:pass@localhost/financedb  # For production
+
+# Logging
+LOG_LEVEL=INFO
+ENABLE_AUDIT_LOGGING=true
+
+# Deduplication
+DEDUP_TIME_WINDOW_DAYS=1
+DEDUP_FUZZY_THRESHOLD=85
+DEDUP_MERGE_DUPLICATES=true
+
+# Feature Flags
+ENABLE_PDF_OCR=false
+ENABLE_CAMELOT=false
+ENABLE_TABULA=false
+```
+
+## Workflow Examples
+
+### Example 1: Monthly Statement Ingestion
+
+```bash
+# Download CSV export from bank
+# Save to data/raw/hdfc_oct_2024.csv
+
+# Ingest statement
+python3 finance.py ingest data/raw/hdfc_oct_2024.csv --bank="HDFC Bank"
+
+# View this month's transactions
+python3 finance.py list --start-date=2024-10-01 --end-date=2024-10-31
+
+# See spending summary
+python3 finance.py summary --start-date=2024-10-01 --end-date=2024-10-31
+```
+
+### Example 2: Multiple Statements
+
+```bash
+# Ingest multiple months
+python3 finance.py ingest data/raw/hdfc_sep_2024.csv --bank="HDFC Bank"
+python3 finance.py ingest data/raw/hdfc_oct_2024.csv --bank="HDFC Bank"
+python3 finance.py ingest data/raw/icici_oct_2024.csv --bank="ICICI Bank"
+
+# View combined summary
+python3 finance.py summary
+```
+
+### Example 3: Category Analysis
+
+```bash
+# See all food spending
+python3 finance.py list --category="Food & Dining"
+
+# See all shopping
+python3 finance.py list --category="Shopping"
+
+# Export to JSON for analysis
+python3 finance.py list --format=json > transactions.json
+```
+
+## Features Explained
+
+### 1. PDF Parsing (Multi-Strategy Fallback)
+
+The PDF parser tries multiple strategies in order:
+
+1. **pdfplumber text extraction** (70-80% success, zero deps)
+2. **pdfplumber table extraction** (40-60% success)
+3. **Tabula** (requires Java, optional)
+4. **Camelot** (requires Ghostscript, optional)
+5. **OCR** (requires Tesseract, optional, slow)
+
+Most bank statements work with pdfplumber (strategies 1-2).
+
+### 2. Merchant Mapping
+
+Raw merchant names from statements are normalized:
+
+- `"SWIGGY BANGALORE"` → `"Swiggy"`
+- `"AMAZON PAY INDIA"` → `"Amazon"`
+- `"NETFLIX.COM"` → `"Netflix"`
+
+100+ default merchants included. Add custom mappings in `data/merchant_mappings.json`.
+
+### 3. ML Categorization
+
+TF-IDF + Random Forest classifier categorizes transactions:
+
+- **Food & Dining**: Swiggy, Zomato, restaurants
+- **Shopping**: Amazon, Flipkart, Myntra
+- **Transport**: Uber, Ola, fuel
+- **Entertainment**: Netflix, movie tickets
+- **Bills & Utilities**: Mobile recharge, electricity
+- And more...
+
+Train with your own labeled data for better accuracy.
+
+### 4. Deduplication
+
+Automatically detects duplicates using:
+
+- **Date**: ±1 day window (configurable)
+- **Amount**: Exact match (±₹0.01 tolerance)
+- **Merchant**: 85% fuzzy similarity (configurable)
+
+Prevents double-counting when ingesting multiple sources.
+
+### 5. Privacy & Security
+
+- **Encryption**: AES-256-GCM for sensitive data
+- **Key Management**: Auto-generated, rotatable keys
+- **File Permissions**: Automatic 600 permissions for secrets
+- **Audit Logging**: All PII access logged
+- **.gitignore**: Comprehensive protection for secrets
+
+### 6. Database
+
+- **Development**: SQLite (zero configuration)
+- **Production**: PostgreSQL (just change `DATABASE_URL`)
+- **Migrations**: Automatic table creation
+- **Indexes**: Optimized for common queries
+
+## Next Steps
+
+1. **Add More Training Data**: Improve ML accuracy
+   - Export your transactions: `python3 finance.py list --format=json > all_txns.json`
+   - Label them manually
+   - Retrain: `python3 finance.py train your_labeled_data.jsonl`
+
+2. **Custom Merchant Mappings**: Add your frequently used merchants
+   - Use `mapping/editor.py` for bulk editing
+   - See `SPEC_ENHANCEMENTS.md` for merchant mapping CLI tools
+
+3. **Multiple Accounts**: Track multiple bank accounts
+   - Ingest with `--account-id` flag
+   - Query by account
+
+4. **Export Reports**: Generate spending reports
+   - Use `--format=json` for export
+   - Analyze in Excel/Python/R
+
+5. **Deploy to Production**:
+   - Migrate to PostgreSQL
+   - Set up proper secrets management
+   - Enable audit logging
+   - See `TECHNICAL_SPECIFICATION.md` Section 16 for scaling guide
+
+## Troubleshooting
+
+### PDF Parsing Fails
+```bash
+# Try enabling optional strategies
+ENABLE_TABULA=true python3 finance.py ingest statement.pdf
+```
+
+### ML Model Not Found
+```bash
+# Train the model first
+python3 finance.py train ml/training_data/labeled_transactions.jsonl
+```
+
+### Database Errors
+```bash
+# Reinitialize database
+rm data/finance.db
+python3 finance.py init-db
+```
+
+### Permission Errors
+```bash
+# Fix file permissions
+chmod 600 .env .vault_key
+chmod +x finance.py
+```
+
+## Documentation
+
+- **TECHNICAL_SPECIFICATION.md** - Complete technical specification (5400+ lines)
+- **SPEC_ENHANCEMENTS.md** - All 12 enhancements detailed
+- **IMPLEMENTATION_STATUS.md** - Implementation progress tracker
+- **MERGE_COMPLETE.md** - Enhancement merge summary
+
+## Testing
+
+Sample data provided:
+- `data/raw/sample_statement.csv` - Test CSV with 15 transactions
+- `ml/training_data/labeled_transactions.jsonl` - 50 labeled samples
+
+Run end-to-end test:
+```bash
+python3 finance.py init-db
+python3 finance.py train ml/training_data/labeled_transactions.jsonl
+python3 finance.py ingest data/raw/sample_statement.csv
+python3 finance.py list
+python3 finance.py summary
+```
+
+## Support
+
+For issues or questions:
+1. Check logs: `tail -f logs/app.log`
+2. Review configuration: `python3 finance.py config-info`
+3. Consult technical specification: `TECHNICAL_SPECIFICATION.md`
+
+---
+
+**Status:** ✅ Production-Ready
+
+**Version:** 1.0.0
+
+**Last Updated:** 2025-10-26

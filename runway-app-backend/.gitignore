@@ -1,0 +1,131 @@
+# Finance App - Git Ignore
+
+# ============================================
+# ENVIRONMENT & SECRETS (NEVER COMMIT!)
+# ============================================
+.env
+.env.local
+.env.*.local
+*.env
+!.env.example
+
+# Vault keys (CRITICAL!)
+.vault_key
+.vault_key.*
+*.vault_key
+vault_key*
+
+# Credentials & Secrets
+secrets.json
+credentials.json
+service-account.json
+api_keys.txt
+*.pem
+*.key
+!.env.example
+
+# ============================================
+# DATABASE FILES
+# ============================================
+*.db
+*.sqlite
+*.sqlite3
+data/*.db
+data/vault.db
+data/vault_backup_*
+
+# ============================================
+# LOGS
+# ============================================
+*.log
+logs/
+vault_audit.log
+app.log
+
+# ============================================
+# PYTHON
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environments
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# ============================================
+# IDE
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ============================================
+# TESTING
+# ============================================
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.hypothesis/
+
+# ============================================
+# ML MODELS & DATA
+# ============================================
+ml/models/*.pkl
+ml/models/*.joblib
+ml/evaluation/*.png
+*.parquet
+
+# ============================================
+# BACKUPS
+# ============================================
+*.backup
+*_backup_*
+vault_backup_*
+*.bak
+
+# ============================================
+# TEMPORARY FILES
+# ============================================
+*.tmp
+*.temp
+.cache/
+tmp/
+
+# ============================================
+# OUTPUT & REPORTS
+# ============================================
+data/cleaned/
+reports/
+*.csv.processed
+
+# ============================================
+# OS FILES
+# ============================================
+Thumbs.db
+Desktop.ini

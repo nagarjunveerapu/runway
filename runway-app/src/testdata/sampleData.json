@@ -1,0 +1,33 @@
+{
+  "transactions": [
+    { "id": "T20250101-1", "date": "2025-01-01", "category": "Salary-Primary", "amount": 120000, "notes": "Salary Jan", "user_forced_type": "income" },
+    { "id": "T20250105-1", "date": "2025-01-05", "category": "Investments-SIP: Motilal Oswal Midcap", "amount": 5000, "notes": "SIP Jan", "user_forced_type": "investment" },
+    { "id": "T20250107-1", "date": "2025-01-07", "category": "Groceries", "amount": 3200, "notes": "Groceries", "user_forced_type": "expense" },
+    { "id": "T20250110-1", "date": "2025-01-10", "category": "EMI-Home Loan", "amount": 25000, "notes": "Home loan", "user_forced_type": "expense" },
+    { "id": "T20250201-1", "date": "2025-02-01", "category": "Salary-Primary", "amount": 120000, "notes": "Salary Feb", "user_forced_type": "income" },
+    { "id": "T20250205-1", "date": "2025-02-05", "category": "Investments-SIP: Motilal Oswal Midcap", "amount": 5000, "notes": "SIP Feb", "user_forced_type": "investment" },
+    { "id": "T20250208-1", "date": "2025-02-08", "category": "Dining Out", "amount": 1200, "notes": "Dinner", "user_forced_type": "expense" },
+    { "id": "T20250301-1", "date": "2025-03-01", "category": "Salary-Primary", "amount": 120000, "notes": "Salary Mar", "user_forced_type": "income" }
+  ],
+  "assets": [
+    { "id": "A001", "name": "Savings Account", "type": "Bank Account", "quantity": 1, "purchase_value": 200000, "current_value": 200000, "liquid": true },
+    { "id": "A002", "name": "Motilal Oswal Midcap", "type": "Mutual Fund", "quantity": 100, "purchase_value": 100000, "current_value": 120000, "liquid": true },
+    { "id": "A003", "name": "Home - Chennai", "type": "Property", "quantity": 1, "purchase_value": 4500000, "current_value": 6000000, "liquid": false }
+  ],
+  "lookups": {
+    "incomeCategories": ["Salary-Primary","Salary-Spouse","Bonus","Rental Income","Dividends","Other"],
+    "expenseCategories": ["Groceries","Dining Out","Utilities-Electricity","Fuel/Transport","EMI-Home Loan","Insurance","Healthcare","Other"],
+    "assetTypes": [
+      {"name":"Bank Account","liquid":true},
+      {"name":"Fixed Deposit","liquid":false},
+      {"name":"Mutual Fund","liquid":true},
+      {"name":"Stock","liquid":true},
+      {"name":"Property","liquid":false},
+      {"name":"Other","liquid":false}
+    ],
+    "liabilityTypes": ["Home Loan","Personal Loan","Car Loan","Credit Card"],
+    "investmentCategories": ["Investments-SIP: Motilal Oswal Midcap","Investments-SIP: Quant Smallcap","Investments-Stock"]
+  },
+  "liquidations": [],
+  "meta": { "source": "sampleData", "created": "2025-10-12T00:00:00Z" }
+}

@@ -1,0 +1,64 @@
+═══════════════════════════════════════════════════════════════════════
+  RUNWAY FINANCE - QUICK START COMMANDS
+═══════════════════════════════════════════════════════════════════════
+
+STEP 1: Open TWO separate terminal windows/tabs
+
+STEP 2: In TERMINAL 1 - Start Backend:
+────────────────────────────────────────────────────────────────────────
+cd /Users/karthikeyaadhya/runway_workspace/runway-app-backend
+python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+Wait for: "Application startup complete"
+Then proceed to Step 3
+
+
+STEP 3: In TERMINAL 2 - Start Frontend:
+────────────────────────────────────────────────────────────────────────
+cd /Users/karthikeyaadhya/runway_workspace/runway-app
+npm start
+
+
+═══════════════════════════════════════════════════════════════════════
+ACCESS POINTS:
+────────────────────────────────────────────────────────────────────────
+Backend API: http://localhost:8000
+API Docs:    http://localhost:8000/docs
+Frontend:    http://localhost:3000 (will open automatically)
+
+
+═══════════════════════════════════════════════════════════════════════
+LOGIN CREDENTIALS:
+────────────────────────────────────────────────────────────────────────
+Email:    test@example.com
+Password: testpassword123
+
+
+═══════════════════════════════════════════════════════════════════════
+TO STOP EVERYTHING (if needed):
+────────────────────────────────────────────────────────────────────────
+# In a new terminal, run:
+pkill -9 -f "uvicorn"
+pkill -9 -f "react-scripts"
+lsof -ti:8000 | xargs kill -9
+lsof -ti:3000 | xargs kill -9
+lsof -ti:3001 | xargs kill -9
+
+
+═══════════════════════════════════════════════════════════════════════
+TROUBLESHOOTING:
+────────────────────────────────────────────────────────────────────────
+If backend won't start:
+  cd runway-app-backend
+  pip install -r requirements.txt
+  python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+
+If frontend won't start:
+  cd runway-app
+  npm install
+  npm start
+
+═══════════════════════════════════════════════════════════════════════
+
+
+

@@ -1,0 +1,90 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Node
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/finance.db
+
+# Logs
+*.log
+logs/
+api.log
+nohup.out
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# PDFs and CSVs with transaction data
+*.pdf
+*ransaction*.csv
+parsed_transactions_*.csv
+
+# ML Models (optional - uncomment if models are large)
+# *.pkl
+# *.joblib
+
+# Secrets
+.vault_key
+*.pem
+*.key
+
+# Test output
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build output
+build/
+dist/

@@ -1,0 +1,30 @@
+{
+  "evaluation_date": "2025-10-27T09:29:36.030177",
+  "metrics": {
+    "accuracy": 0.8557692307692307,
+    "cv_scores": [
+      0.9423076923076923,
+      0.8894230769230769,
+      0.9230769230769231,
+      0.8653846153846154,
+      0.9134615384615384
+    ],
+    "mean_cv_score": 0.9067307692307693,
+    "training_samples": 1040,
+    "categories": [
+      "Bills & Utilities",
+      "EMI & Loans",
+      "Entertainment",
+      "Food & Dining",
+      "Government Schemes",
+      "Groceries",
+      "Healthcare",
+      "Insurance",
+      "Mutual Funds & Investments",
+      "Shopping",
+      "Transfer",
+      "Transport",
+      "Travel"
+    ]
+  }
+}

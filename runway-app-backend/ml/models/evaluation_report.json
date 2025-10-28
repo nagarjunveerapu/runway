@@ -1,0 +1,26 @@
+{
+  "evaluation_date": "2025-10-27T09:29:43.126436",
+  "metrics": {
+    "accuracy": 0.8615384615384616,
+    "correct": 224,
+    "total": 260,
+    "category_accuracies": {
+      "Mutual Funds & Investments": 0.95,
+      "Healthcare": 1.0,
+      "Entertainment": 0.9090909090909091,
+      "Shopping": 1.0,
+      "Travel": 0.8888888888888888,
+      "Insurance": 0.9615384615384616,
+      "Food & Dining": 0.6,
+      "EMI & Loans": 0.95,
+      "Groceries": 1.0,
+      "Bills & Utilities": 0.5,
+      "Government Schemes": 0.7857142857142857,
+      "Transport": 0.8571428571428571,
+      "Transfer": 0.7222222222222222
+    },
+    "avg_confidence": 0.35945025398979347,
+    "avg_correct_confidence": 0.3834327374373325,
+    "avg_incorrect_confidence": 0.21022591253844014
+  }
+}

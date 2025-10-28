@@ -1,0 +1,45 @@
+{
+  "version": "2.0",
+  "trained_at": "2025-10-27T09:29:36.002629",
+  "training_samples": 1040,
+  "categories": [
+    "Bills & Utilities",
+    "EMI & Loans",
+    "Entertainment",
+    "Food & Dining",
+    "Government Schemes",
+    "Groceries",
+    "Healthcare",
+    "Insurance",
+    "Mutual Funds & Investments",
+    "Shopping",
+    "Transfer",
+    "Transport",
+    "Travel"
+  ],
+  "accuracy": 0.8557692307692307,
+  "cv_scores": [
+    0.9423076923076923,
+    0.8894230769230769,
+    0.9230769230769231,
+    0.8653846153846154,
+    0.9134615384615384
+  ],
+  "mean_cv_score": 0.9067307692307693,
+  "vocab_size": 833,
+  "class_weights": {
+    "Bills & Utilities": 1.0,
+    "EMI & Loans": 1.0,
+    "Entertainment": 1.0256410256410255,
+    "Food & Dining": 1.0,
+    "Government Schemes": 0.9302325581395349,
+    "Groceries": 1.0389610389610389,
+    "Healthcare": 1.0126582278481013,
+    "Insurance": 1.0810810810810811,
+    "Mutual Funds & Investments": 1.0,
+    "Shopping": 0.963855421686747,
+    "Transfer": 0.975609756097561,
+    "Transport": 1.0126582278481013,
+    "Travel": 0.975609756097561
+  }
+}
