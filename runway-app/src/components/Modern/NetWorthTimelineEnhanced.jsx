@@ -1,7 +1,7 @@
 // src/components/Modern/NetWorthTimelineEnhanced.jsx
 import React, { useState, useEffect, useRef } from 'react';
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from 'recharts';
-import { getNetWorthTimeline } from '../../api/services/netWorth';
+import { getNetWorthTimeline, getNetWorthProjection } from '../../api/services/netWorth';
 
 /**
  * Enhanced Net Worth Timeline with:
@@ -47,8 +47,31 @@ export default function NetWorthTimelineEnhanced() {
       const period = periods.find(p => p.value === selectedPeriod);
       const months = period ? period.months : 12;
 
-      // Fetch timeline data
-      const response = await getNetWorthTimeline(months);
+      // Try dynamic timeline first (with projections), fall back to basic timeline
+      let response;
+      try {
+        // Use projection endpoint which includes both historical and future projections
+        const years = Math.ceil(months / 12);
+        response = await getNetWorthProjection(years);
+        
+        // If projection exists, use it; otherwise try static timeline
+        if (!response.timeline || response.timeline.length === 0) {
+          response = await getNetWorthTimeline(months);
+        }
+      } catch (projError) {
+        // Fall back to basic timeline if projection fails
+        console.error('Projection failed, falling back to static timeline:', projError);
+        console.error('Projection error details:', projError.response?.data || projError.message);
+        response = await getNetWorthTimeline(months);
+      }
+      
+      // Debug logging
+      console.log('Timeline response:', response);
+      console.log('Has historical data:', response.has_historical_data);
+      console.log('Timeline length:', response.timeline?.length);
+      console.log('Liability details:', JSON.stringify(response.liability_details, null, 2));
+      console.log('First timeline entry:', JSON.stringify(response.timeline?.[0], null, 2));
+      console.log('All timeline values (liabilities):', response.timeline?.map(t => ({ month: t.month, liabilities: t.liabilities, net_worth: t.net_worth })));
 
       if (!response.timeline || response.timeline.length === 0) {
         setError("No financial data available. Add assets and liabilities to start tracking.");
@@ -58,7 +81,9 @@ export default function NetWorthTimelineEnhanced() {
       }
 
       // Transform data for Recharts
-      const chartData = response.timeline.map(item => ({
+      // Handle both basic timeline and projection endpoints
+      const dataSource = response.timeline || [];
+      const chartData = dataSource.map(item => ({
         month: item.month,
         monthFormatted: formatMonth(item.month),
         assets: item.assets || 0,
@@ -66,14 +91,30 @@ export default function NetWorthTimelineEnhanced() {
         netWorth: item.net_worth || 0,
         assetsFormatted: formatCurrency(item.assets || 0),
         liabilitiesFormatted: formatCurrency(item.liabilities || 0),
-        netWorthFormatted: formatCurrency(item.net_worth || 0)
+        netWorthFormatted: formatCurrency(item.net_worth || 0),
+        // Additional fields for projections
+        is_historical: item.is_historical,
+        is_projected: item.is_projected,
+        payoff_event: item.payoff_event,
+        cash_flow_improvement: item.cash_flow_improvement
       }));
 
       setFullData(chartData);
       setTimelineData(chartData);
 
       // Detect EMI payoff dates (when liabilities drop significantly)
-      detectEMIPayoffs(chartData);
+      // Or use payoff events from projection endpoint
+      if (response.loan_payoff_schedule && response.loan_payoff_schedule.length > 0) {
+        const payoffMarkers = response.loan_payoff_schedule.map(payoff => ({
+          month: payoff.payoff_month,
+          amount: payoff.current_balance,
+          name: payoff.name,
+          type: 'projected'
+        }));
+        setEmiPayoffDates(payoffMarkers);
+      } else {
+        detectEMIPayoffs(chartData);
+      }
 
     } catch (err) {
       console.error('Failed to load timeline:', err);
@@ -338,6 +379,7 @@ export default function NetWorthTimelineEnhanced() {
               tick={{ fill: '#6b7280', fontSize: 11 }}
               tickLine={{ stroke: '#e5e7eb' }}
               tickFormatter={formatCurrencyAxis}
+              domain={['dataMin - 500000', 'dataMax + 500000']}
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend

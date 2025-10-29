@@ -390,47 +390,153 @@ async def get_net_worth_projection(
     """
     Project net worth into the future based on current EMIs and investments.
 
+    This endpoint now provides:
+    - Detailed liability/loan data with EMI details
+    - Future timeline from loan amortization
+    - Extended timeline showing future projections
+    - Marked EMI payoff dates on timeline
+    - Cash flow improvements after each payoff
+    - Visual distinction between historical and projected data
+    
     Shows when:
     - Net worth becomes positive
-    - Loans will be paid off
+    - Loans will be paid off (exact dates)
     - Investment targets will be reached
+    - Cash flow improves after loan payoffs
     """
     session = db.get_session()
     try:
         months_ahead = years * 12
+        current_month = datetime.now().strftime('%Y-%m')
 
-        result = project_future_net_worth(
-            session=session,
-            user_id=current_user.user_id,
-            months_ahead=months_ahead
-        )
-
-        # Find when each loan gets paid off
+        # Fetch all liability/loan data with EMI details
         liabilities = session.query(Liability).filter(
             Liability.user_id == current_user.user_id
         ).all()
 
+        # Build detailed liability information
+        liability_details = []
         loan_payoff_schedule = []
+        total_emi_amount = 0
+        
         for liability in liabilities:
+            # Calculate amortization schedule for this liability
+            emi_details = {
+                'liability_id': liability.liability_id,
+                'name': liability.name,
+                'type': liability.liability_type,
+                'principal': liability.principal_amount,
+                'current_balance': liability.outstanding_balance,
+                'interest_rate': liability.interest_rate,
+                'emi_amount': liability.emi_amount,
+                'original_tenure': liability.original_tenure_months,
+                'remaining_months': liability.remaining_tenure_months,
+                'lender': liability.lender_name,
+                'start_date': liability.start_date.isoformat() if liability.start_date else None
+            }
+            
+            total_emi_amount += liability.emi_amount or 0
+            liability_details.append(emi_details)
+            
+            # Calculate exact payoff date
             if liability.remaining_tenure_months:
                 payoff_date = datetime.now() + relativedelta(months=liability.remaining_tenure_months)
                 loan_payoff_schedule.append({
                     'name': liability.name,
                     'payoff_month': payoff_date.strftime('%Y-%m'),
                     'months_remaining': liability.remaining_tenure_months,
-                    'current_balance': liability.outstanding_balance
+                    'current_balance': liability.outstanding_balance,
+                    'emi_amount': liability.emi_amount,
+                    'monthly_savings_after_payoff': liability.emi_amount  # Cash flow improvement
                 })
 
+        # Generate projection timeline with historical data
+        # Calculate historical months from previous snapshots
+        snapshots = session.query(NetWorthSnapshot).filter(
+            NetWorthSnapshot.user_id == current_user.user_id
+        ).order_by(NetWorthSnapshot.month).limit(12).all()
+        
+        historical_timeline = []
+        if snapshots:
+            for snapshot in snapshots:
+                historical_timeline.append({
+                    'month': snapshot.month,
+                    'assets': snapshot.total_assets,
+                    'liabilities': snapshot.total_liabilities,
+                    'net_worth': snapshot.net_worth,
+                    'is_historical': True  # Mark as historical
+                })
+        
+        # Generate future projection
+        result = project_future_net_worth(
+            session=session,
+            user_id=current_user.user_id,
+            months_ahead=months_ahead
+        )
+        
+        # Enhance future timeline with payoff markers and cash flow improvements
+        enhanced_timeline = []
+        current_total_liabilities = sum(l.outstanding_balance or 0 for l in liabilities)
+        improves = []  # Track cash flow improvements
+        
+        for entry in result['timeline']:
+            # Find if any loan payoff happens this month
+            payoff_info = None
+            cash_flow_improvement = 0
+            
+            for payoff in loan_payoff_schedule:
+                if entry['month'] == payoff['payoff_month']:
+                    payoff_info = {
+                        'loan_name': payoff['name'],
+                        'current_balance': payoff['current_balance'],
+                        'monthly_savings': payoff['monthly_savings_after_payoff']
+                    }
+                    cash_flow_improvement = payoff['monthly_savings_after_payoff']
+                    improves.append({
+                        'month': entry['month'],
+                        'loan_name': payoff['name'],
+                        'balance_paid_off': payoff['current_balance'],
+                        'monthly_cash_flow_improvement': payoff['monthly_savings_after_payoff']
+                    })
+                    break
+            
+            enhanced_timeline.append({
+                'month': entry['month'],
+                'assets': entry['assets'],
+                'liabilities': entry['liabilities'],
+                'net_worth': entry['net_worth'],
+                'liquid_assets': entry.get('liquid_assets', 0),
+                'is_historical': entry['month'] < current_month,  # Distinguish historical
+                'is_projected': entry['month'] >= current_month,   # Distinguish projected
+                'payoff_event': payoff_info,
+                'cash_flow_improvement': cash_flow_improvement,
+                'cumulative_cash_flow_improvement': sum(p['monthly_savings_after_payoff'] 
+                                                       for p in improves if p['month'] <= entry['month'])
+            })
+
+        # Calculate insights
+        initial_net_worth = historical_timeline[-1]['net_worth'] if historical_timeline else enhanced_timeline[0]['net_worth']
+        final_net_worth = result['final_net_worth']
+        
         return {
-            'timeline': result['timeline'],
+            'timeline': enhanced_timeline,
+            'historical_timeline': historical_timeline,  # Separate historical data
+            'liability_details': liability_details,  # Full EMI details
+            'total_monthly_emi': total_emi_amount,
+            'loan_payoff_schedule': sorted(loan_payoff_schedule, key=lambda x: x['payoff_month']),
+            'cash_flow_improvements': improves,  # Month-by-month improvements
+            'total_cash_flow_improvement': sum(p['monthly_savings_after_payoff'] for p in loan_payoff_schedule),
             'crossover_point': result['crossover_point'],
             'years_projected': years,
-            'final_net_worth': result['final_net_worth'],
-            'total_growth': result['net_worth_growth'],
-            'loan_payoff_schedule': loan_payoff_schedule,
+            'final_net_worth': final_net_worth,
+            'total_growth': final_net_worth - initial_net_worth,
             'insights': {
                 'will_be_positive': result['crossover_point'] is not None,
-                'months_to_positive': None  # Calculate from crossover_point if needed
+                'months_to_positive': None,  # Calculate from crossover_point if needed
+                'current_total_liabilities': current_total_liabilities,
+                'total_loans': len(liabilities),
+                'loans_with_emi': len([l for l in liabilities if l.emi_amount]),
+                'quickest_payoff': min(loan_payoff_schedule, key=lambda x: x['months_remaining']) if loan_payoff_schedule else None
             }
         }
 

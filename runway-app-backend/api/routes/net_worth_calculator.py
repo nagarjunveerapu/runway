@@ -62,8 +62,19 @@ def get_liability_balance_at_month(liability: Liability, months_from_now: int) -
         Outstanding balance after months_from_now months of additional EMI payments
     """
     # If no loan details, return static balance
-    if not liability.principal_amount or not liability.emi_amount or not liability.interest_rate:
+    if not liability.principal_amount or not liability.emi_amount:
         return liability.outstanding_balance if liability.outstanding_balance else 0
+    
+    # Handle case where we have EMI but missing interest rate
+    # Use simple linear reduction based on EMI amount
+    if not liability.interest_rate:
+        # Estimate tenure from EMI amount (how many months to pay off)
+        if liability.emi_amount > 0:
+            estimated_months = liability.outstanding_balance / liability.emi_amount
+            reduction_per_month = liability.outstanding_balance / estimated_months
+            new_balance = liability.outstanding_balance - (reduction_per_month * months_from_now)
+            return max(0, new_balance)
+        return liability.outstanding_balance
 
     # If we don't have original tenure, fall back to simple calculation
     if not liability.original_tenure_months:
@@ -215,6 +226,63 @@ def calculate_dynamic_net_worth_timeline(
                 sip_value = get_sip_value_at_month(sip.emi_amount, months_invested, annual_return=12.0)
                 total_assets += sip_value
                 liquid_assets += sip_value  # SIPs are liquid
+        
+        # Add monthly savings accumulation for projection (Real Finance Model)
+        # How real finance systems work:
+        # 1. Income - Expenses = Savings (from transaction data)
+        # 2. Savings are invested in assets (FD, MF, Stocks, etc.)
+        # 3. Investments grow with returns (4-12% annually depending on type)
+        if projection:
+            # Calculate months elapsed from start
+            months_elapsed = (current_date.year - start_date.year) * 12 + (current_date.month - start_date.month)
+            
+            if months_elapsed > 0:
+                # Get transaction data to calculate actual savings rate
+                from storage.database import DatabaseManager
+                from storage.models import Transaction
+                
+                # Calculate average monthly income and expenses from recent transactions
+                recent_transactions = session.query(Transaction).filter(
+                    Transaction.user_id == user_id
+                ).order_by(Transaction.date.desc()).limit(100).all()
+                
+                if recent_transactions:
+                    # Group transactions by month to calculate proper monthly averages
+                    monthly_data = {}
+                    for txn in recent_transactions:
+                        if txn.date:
+                            month_key = txn.date[:7]  # YYYY-MM format
+                            if month_key not in monthly_data:
+                                monthly_data[month_key] = {'income': 0, 'expenses': 0}
+                            
+                            if txn.type == 'credit':
+                                monthly_data[month_key]['income'] += txn.amount
+                            elif txn.type == 'debit':
+                                monthly_data[month_key]['expenses'] += txn.amount
+                    
+                    # Calculate average monthly income and expenses
+                    if monthly_data:
+                        avg_monthly_income = sum(m['income'] for m in monthly_data.values()) / len(monthly_data)
+                        avg_monthly_expenses = sum(m['expenses'] for m in monthly_data.values()) / len(monthly_data)
+                        
+                        # Calculate net monthly savings (this is what goes into assets)
+                        monthly_savings = max(0, avg_monthly_income - avg_monthly_expenses)
+                        
+                        # Apply investment returns to accumulated savings
+                        # Conservative: assume savings are invested with 8% annual return
+                        annual_return_rate = 0.08
+                        monthly_return_rate = annual_return_rate / 12
+                        
+                        # Calculate accumulated savings with compounding
+                        accumulated_savings = 0
+                        for month in range(1, months_elapsed + 1):
+                            # This month's savings contribution
+                            monthly_contribution = monthly_savings
+                            # Previous accumulated savings grow with returns
+                            accumulated_savings = accumulated_savings * (1 + monthly_return_rate) + monthly_contribution
+                        
+                        total_assets += accumulated_savings
+                        liquid_assets += accumulated_savings
 
         # Calculate liabilities (with EMI reduction)
         total_liabilities = 0
