@@ -379,27 +379,410 @@ const periods = [
 
 ## 📈 Future Enhancements
 
-### **Planned Features**
+### **Phase 2: Advanced Features (Not Yet Implemented)**
 
-1. **FIRE Goal Projection Line**
-   - Show target net worth line on chart
-   - Calculate trajectory to FIRE goal
+The following features are planned for future implementation to enhance the Net Worth Timeline functionality. These are enhancements beyond the core MVP which is already complete and working.
 
-2. **Annotations**
-   - Mark major events (e.g., "Bought house", "Paid off loan")
-   - Allow users to add notes to specific months
+---
 
-3. **Comparison Mode**
-   - Compare this year vs last year
-   - Show year-over-year growth
+### **1. FIRE Goal Projection Line** 🎯
 
-4. **Export Chart**
-   - Download as PNG
-   - Share on social media
+**Status**: ⏳ Planned
 
-5. **Automated Snapshots**
-   - Background job to create monthly snapshots
-   - Email alerts when net worth milestones reached
+**Description:**
+Add a visual projection line on the timeline chart showing the path to Financial Independence (FIRE) goal.
+
+**Requirements:**
+- User inputs FIRE goal amount (e.g., ₹5 Crore)
+- System calculates projected trajectory based on historical growth rate
+- Chart displays goal line and projected intersection point
+- Show estimated time to reach FIRE goal
+
+**Implementation Plan:**
+1. **Backend Changes:**
+   - Add `fire_goal_amount` field to user profile or settings
+   - Create endpoint: `GET /api/v1/net-worth/fire-projection`
+   - Calculate average monthly growth rate from historical data
+   - Project future months to goal achievement
+
+2. **Frontend Changes:**
+   - Add FIRE goal input field in settings
+   - Extend chart to show projection beyond current date
+   - Add dashed line for projected trajectory
+   - Display milestone indicator where lines intersect
+
+3. **Algorithm:**
+   ```python
+   # Calculate average monthly growth
+   avg_monthly_growth = (latest_net_worth - oldest_net_worth) / months
+
+   # Project months to goal
+   months_to_goal = (fire_goal - current_net_worth) / avg_monthly_growth
+
+   # Generate projection data points
+   projection = []
+   for month in range(1, months_to_goal + 1):
+       projected_value = current_net_worth + (avg_monthly_growth * month)
+       projection.append({month: projected_value})
+   ```
+
+**UI Mockup:**
+```
+Chart showing:
+- Blue area: Historical net worth
+- Green dashed line: Projected trajectory
+- Red horizontal line: FIRE goal
+- Purple dot: Intersection point with "FIRE in 5.2 years" label
+```
+
+**Estimated Effort:** 8-12 hours
+
+---
+
+### **2. Event Annotations** 📍
+
+**Status**: ⏳ Planned
+
+**Description:**
+Allow users to mark and annotate significant financial events on the timeline.
+
+**Requirements:**
+- Users can add notes to specific months
+- Annotations appear as markers on the chart
+- Hover/click to view full annotation
+- Categories: Major Purchase, Loan Paid Off, Job Change, Investment, Other
+
+**Database Schema:**
+```sql
+CREATE TABLE net_worth_annotations (
+    annotation_id VARCHAR(36) PRIMARY KEY,
+    user_id VARCHAR(36) NOT NULL,
+    month VARCHAR(7) NOT NULL,  -- YYYY-MM
+    title VARCHAR(100) NOT NULL,
+    description TEXT,
+    category VARCHAR(50),
+    icon VARCHAR(20),  -- emoji or icon name
+    created_at DATETIME,
+    FOREIGN KEY (user_id) REFERENCES users(user_id)
+);
+```
+
+**Implementation Plan:**
+1. **Backend:**
+   - Create NetWorthAnnotation model
+   - Add CRUD endpoints:
+     - `POST /api/v1/net-worth/annotations`
+     - `GET /api/v1/net-worth/annotations`
+     - `PUT /api/v1/net-worth/annotations/{id}`
+     - `DELETE /api/v1/net-worth/annotations/{id}`
+
+2. **Frontend:**
+   - Add annotation markers on chart (Recharts ReferenceDot)
+   - Modal dialog for adding/editing annotations
+   - Tooltip on hover showing annotation details
+   - Filter annotations by category
+
+3. **UI Features:**
+   - Icon selector for annotation types
+   - Rich text editor for description
+   - Color-coded categories
+
+**Example Annotations:**
+- 🏠 "Bought first house" (Major Purchase)
+- 💰 "Paid off car loan" (Loan Paid Off)
+- 🚀 "Promotion to Senior Engineer" (Job Change)
+- 📈 "Started SIP in mutual funds" (Investment)
+
+**Estimated Effort:** 12-16 hours
+
+---
+
+### **3. Comparison Mode** 📊
+
+**Status**: ⏳ Planned
+
+**Description:**
+Enable year-over-year comparison to visualize growth and identify trends.
+
+**Requirements:**
+- Toggle between "Current" and "Comparison" modes
+- Compare current year vs previous year
+- Show percentage differences
+- Highlight months with significant changes
+
+**Implementation Plan:**
+1. **Backend:**
+   - Extend timeline endpoint with comparison parameter:
+     - `GET /api/v1/net-worth/timeline?months=12&compare=true`
+   - Return two datasets: current year and previous year
+   - Calculate month-by-month differences
+
+2. **Frontend:**
+   - Add "Compare" toggle button
+   - Display two lines on chart (current year vs last year)
+   - Show difference bars below chart
+   - Add legend distinguishing the years
+
+3. **Visualization:**
+   ```
+   Chart displays:
+   - Solid blue line: 2025 data
+   - Dashed gray line: 2024 data (same months)
+   - Green/Red bars: Month-over-month difference
+   - Percentage growth indicator
+   ```
+
+4. **Metrics Panel:**
+   ```
+   YoY Growth: ↑ ₹2.5L (15.3%)
+   Best Month: August (+₹45K)
+   Worst Month: March (-₹12K)
+   ```
+
+**Estimated Effort:** 10-14 hours
+
+---
+
+### **4. Export & Share Chart** 📸
+
+**Status**: ⏳ Planned
+
+**Description:**
+Allow users to download and share their net worth timeline as an image.
+
+**Requirements:**
+- Export chart as PNG image
+- Option to hide/blur specific values (privacy mode)
+- Share on social media with custom message
+- Email chart to self
+
+**Implementation Plan:**
+1. **Frontend Libraries:**
+   - Use `html2canvas` or `dom-to-image` for chart capture
+   - Implement download functionality
+
+2. **Features:**
+   - "Export" button with dropdown:
+     - Download as PNG
+     - Copy to clipboard
+     - Share on Twitter/LinkedIn
+     - Email to self
+
+3. **Privacy Mode:**
+   - Toggle to blur actual numbers
+   - Show percentage growth only
+   - Watermark: "Generated by Runway Finance"
+
+4. **Backend (Email):**
+   - Endpoint: `POST /api/v1/net-worth/email-chart`
+   - Accept base64 image
+   - Send email with chart attached
+
+**Example Export Options:**
+```
+[Download PNG] [Copy Link] [Share] [Email]
+
+Privacy Options:
+☑ Hide actual amounts (show trends only)
+☑ Add Runway watermark
+☐ Include FIRE goal
+```
+
+**Estimated Effort:** 6-10 hours
+
+---
+
+### **5. Automated Snapshots** 🤖
+
+**Status**: ⏳ Planned (Highest Priority)
+
+**Description:**
+Automatically create monthly net worth snapshots without manual intervention.
+
+**Requirements:**
+- Cron job runs on 1st of every month
+- Calculates net worth for all active users
+- Creates snapshot entries automatically
+- Sends notification emails with summary
+
+**Implementation Plan:**
+
+#### **Option A: Python Cron Job (Recommended)**
+
+1. **Create Script:** `scripts/create_monthly_snapshots.py`
+   ```python
+   #!/usr/bin/env python3
+   """
+   Create monthly net worth snapshots for all users
+   Run on 1st of every month via cron
+   """
+   import sys
+   from pathlib import Path
+   sys.path.insert(0, str(Path(__file__).parent.parent))
+
+   from storage.database import DatabaseManager
+   from storage.models import User
+   from api.routes.net_worth_timeline import calculate_current_net_worth
+   import requests
+
+   def create_snapshots_for_all_users():
+       db = DatabaseManager()
+       users = db.session.query(User).filter(User.is_active == True).all()
+
+       for user in users:
+           try:
+               # Call snapshot API for each user
+               response = create_snapshot(user.user_id)
+               print(f"✅ Created snapshot for {user.email}")
+           except Exception as e:
+               print(f"❌ Failed for {user.email}: {e}")
+
+   if __name__ == "__main__":
+       create_snapshots_for_all_users()
+   ```
+
+2. **Add to Crontab:**
+   ```bash
+   # Run on 1st of every month at 2 AM
+   0 2 1 * * /usr/bin/python3 /path/to/scripts/create_monthly_snapshots.py
+   ```
+
+#### **Option B: Background Task (Celery)**
+
+1. **Install Celery:**
+   ```bash
+   pip install celery redis
+   ```
+
+2. **Create Task:**
+   ```python
+   # tasks/snapshots.py
+   from celery import Celery
+   from celery.schedules import crontab
+
+   app = Celery('runway', broker='redis://localhost:6379/0')
+
+   @app.task
+   def create_monthly_snapshots():
+       # Same logic as Option A
+       pass
+
+   # Schedule
+   app.conf.beat_schedule = {
+       'monthly-snapshots': {
+           'task': 'tasks.snapshots.create_monthly_snapshots',
+           'schedule': crontab(day_of_month='1', hour=2, minute=0),
+       },
+   }
+   ```
+
+#### **Email Notifications:**
+
+1. **Template:** `templates/snapshot_created.html`
+   ```html
+   <h2>Your Monthly Net Worth Snapshot</h2>
+   <p>Hi {{ user_name }},</p>
+   <p>Your October 2025 snapshot has been created!</p>
+
+   <div class="summary">
+     <p><strong>Net Worth:</strong> ₹{{ net_worth | format_currency }}</p>
+     <p><strong>Growth:</strong> {{ growth_percentage }}% ({{ growth_direction }})</p>
+   </div>
+
+   <a href="{{ dashboard_link }}">View Dashboard</a>
+   ```
+
+2. **Send Email:**
+   ```python
+   from utils.email import send_email
+
+   send_email(
+       to=user.email,
+       subject=f"Net Worth Snapshot - {month}",
+       template="snapshot_created",
+       context={
+           'user_name': user.name,
+           'net_worth': snapshot.net_worth,
+           'growth_percentage': calculate_growth(user, snapshot),
+           'dashboard_link': f"{BASE_URL}/wealth"
+       }
+   )
+   ```
+
+#### **Monitoring & Alerts:**
+
+1. **Log File:** `logs/snapshot_cron.log`
+2. **Metrics:**
+   - Number of snapshots created
+   - Number of failures
+   - Execution time
+   - Email delivery status
+
+3. **Alert on Failure:**
+   - If > 10% of users fail, send alert to admin
+   - Retry failed snapshots after 1 hour
+
+**Configuration in `.env`:**
+```bash
+# Snapshot Settings
+AUTO_SNAPSHOT_ENABLED=true
+SNAPSHOT_CRON_SCHEDULE="0 2 1 * *"  # 2 AM on 1st of month
+SNAPSHOT_EMAIL_NOTIFICATIONS=true
+SNAPSHOT_RETRY_ATTEMPTS=3
+```
+
+**Estimated Effort:** 8-12 hours (Option A), 16-20 hours (Option B with Celery)
+
+---
+
+### **Implementation Priority:**
+
+1. **🔥 High Priority:**
+   - Automated Snapshots (Most impactful for user experience)
+   - Export Chart (Frequently requested)
+
+2. **🟡 Medium Priority:**
+   - FIRE Goal Projection (Valuable for FIRE-focused users)
+   - Comparison Mode (Nice to have for analysis)
+
+3. **🟢 Low Priority:**
+   - Event Annotations (Enhancement, not critical)
+
+---
+
+### **Total Estimated Effort:**
+
+| Feature | Effort (hours) | Complexity |
+|---------|---------------|------------|
+| FIRE Goal Projection | 8-12 | Medium |
+| Event Annotations | 12-16 | Medium-High |
+| Comparison Mode | 10-14 | Medium |
+| Export & Share | 6-10 | Low-Medium |
+| Automated Snapshots | 8-20 | Medium-High |
+| **TOTAL** | **44-72** | - |
+
+**Estimated Timeline:** 1-2 weeks for full implementation of all enhancements.
+
+---
+
+### **Dependencies & Prerequisites:**
+
+1. **For Automated Snapshots:**
+   - Redis (if using Celery)
+   - Email service (SMTP or SendGrid)
+   - Cron access (for Option A)
+
+2. **For Export Feature:**
+   - `html2canvas` npm package
+   - Image hosting (optional, for sharing)
+
+3. **For FIRE Projection:**
+   - Historical data (at least 6 months)
+   - User FIRE goal configuration
+
+---
+
+**Note:** All features listed here are enhancements to the already complete and working Net Worth Timeline MVP. These can be implemented incrementally based on user feedback and priorities.
 
 ---
 
@@ -493,6 +876,7 @@ const periods = [
 
 ---
 
-**Last Updated**: 2025-10-27
-**Version**: 1.0
+**Last Updated**: 2025-10-29
+**Version**: 1.1
 **Status**: ✅ Complete & Ready for Testing
+**Phase 2 Planning**: ✅ Future enhancements documented with detailed implementation plans
