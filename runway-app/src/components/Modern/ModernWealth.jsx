@@ -2,7 +2,7 @@
 import React, { useState, useEffect } from 'react';
 import { getDashboardSummary } from '../../api/services/dashboard';
 import { getAccounts } from '../../api/services/accounts';
-import NetWorthTimeline from './NetWorthTimeline';
+import NetWorthTimelineEnhanced from './NetWorthTimelineEnhanced';
 
 /**
  * ModernWealth - Simplified Wealth Dashboard
@@ -108,7 +108,7 @@ export default function ModernWealth({ onNavigate }) {
             </div>
 
             {/* Net Worth Timeline Chart */}
-            <NetWorthTimeline />
+            <NetWorthTimelineEnhanced />
 
             {/* Action Cards */}
             <div className="bg-white rounded-2xl p-5 shadow-sm border border-gray-100">
