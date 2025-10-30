@@ -6,6 +6,9 @@ echo ""
 echo "Frontend will run at: http://localhost:3000"
 echo ""
 
+# Set host explicitly to avoid binding errors
+export HOST=localhost
+
 cd runway-app
 
 # Check if node_modules exists

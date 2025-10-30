@@ -27,8 +27,13 @@ export default function ModernLiabilities({ onNavigate }) {
     outstandingBalance: '',
     emiAmount: '',
     interestRate: '',
+    rateType: 'fixed',
+    rateResetFrequency: '',
     startDate: '',
     originalTenure: '',
+    moratoriumMonths: '',
+    processingFee: '',
+    prepaymentPenaltyPct: '',
     lenderName: '',
     linkedEMI: null
   });
@@ -121,9 +126,14 @@ export default function ModernLiabilities({ onNavigate }) {
           outstanding_balance: Number(formData.outstandingBalance),
           emi_amount: Number(formData.emiAmount) || undefined,
           interest_rate: Number(formData.interestRate) || undefined,
+          rate_type: formData.rateType || undefined,
+          rate_reset_frequency_months: formData.rateResetFrequency ? Number(formData.rateResetFrequency) : undefined,
           start_date: formData.startDate || undefined,
           original_tenure_months: Number(formData.originalTenure) || undefined,
           remaining_tenure_months: remainingTenure,
+          moratorium_months: formData.moratoriumMonths ? Number(formData.moratoriumMonths) : undefined,
+          processing_fee: formData.processingFee ? Number(formData.processingFee) : undefined,
+          prepayment_penalty_pct: formData.prepaymentPenaltyPct ? Number(formData.prepaymentPenaltyPct) : undefined,
           lender_name: formData.lenderName || undefined,
           recurring_pattern_id: formData.linkedEMI?.pattern_id
         })
@@ -139,8 +149,13 @@ export default function ModernLiabilities({ onNavigate }) {
           outstandingBalance: '',
           emiAmount: '',
           interestRate: '',
+          rateType: 'fixed',
+          rateResetFrequency: '',
           startDate: '',
           originalTenure: '',
+          moratoriumMonths: '',
+          processingFee: '',
+          prepaymentPenaltyPct: '',
           lenderName: '',
           linkedEMI: null
         });
@@ -439,6 +454,64 @@ export default function ModernLiabilities({ onNavigate }) {
                       placeholder="e.g., 240"
                     />
                   </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Rate Type</label>
+                    <select
+                      value={formData.rateType}
+                      onChange={(e) => setFormData({ ...formData, rateType: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                    >
+                      <option value="fixed">Fixed</option>
+                      <option value="floating">Floating</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Rate Reset Freq (Months)</label>
+                    <input
+                      type="number"
+                      value={formData.rateResetFrequency}
+                      onChange={(e) => setFormData({ ...formData, rateResetFrequency: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      placeholder="e.g., 6"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Moratorium (Months)</label>
+                    <input
+                      type="number"
+                      value={formData.moratoriumMonths}
+                      onChange={(e) => setFormData({ ...formData, moratoriumMonths: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      placeholder="e.g., 3"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Processing Fee (Optional)</label>
+                    <input
+                      type="number"
+                      value={formData.processingFee}
+                      onChange={(e) => setFormData({ ...formData, processingFee: e.target.value })}
+                      className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      placeholder="e.g., 2500"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Prepayment Penalty % (Optional)</label>
+                  <input
+                    type="number"
+                    value={formData.prepaymentPenaltyPct}
+                    onChange={(e) => setFormData({ ...formData, prepaymentPenaltyPct: e.target.value })}
+                    className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                    placeholder="e.g., 2"
+                  />
                 </div>
 
                 <div>

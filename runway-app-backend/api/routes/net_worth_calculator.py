@@ -88,6 +88,9 @@ def get_liability_balance_at_month(liability: Liability, months_from_now: int) -
     if liability.remaining_tenure_months and months_from_now >= liability.remaining_tenure_months:
         return 0
 
+    # Handle moratorium: skip principal reductions for moratorium period from NOW
+    moratorium_months = liability.moratorium_months or 0
+
     # Calculate FULL amortization schedule from ORIGINAL loan terms
     # This gives us the accurate principal/interest split
     full_schedule = calculate_emi_amortization(
@@ -100,7 +103,8 @@ def get_liability_balance_at_month(liability: Liability, months_from_now: int) -
     months_elapsed_to_today = liability.original_tenure_months - (liability.remaining_tenure_months or 0)
 
     # Calculate total months from loan start to the requested future date
-    total_months_from_start = months_elapsed_to_today + months_from_now
+    effective_months_from_now = max(0, months_from_now - moratorium_months)
+    total_months_from_start = months_elapsed_to_today + effective_months_from_now
 
     # Return balance at that point in the schedule
     if total_months_from_start >= len(full_schedule):

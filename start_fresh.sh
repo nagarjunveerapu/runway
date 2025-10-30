@@ -38,7 +38,7 @@ fi
 
 # Start backend in background
 echo "Starting API server on port 8000..."
-python3 -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload > ../backend.log 2>&1 &
+python3 -m uvicorn api.main:app --host 127.0.0.1 --port 8000 > ../backend.log 2>&1 &
 BACKEND_PID=$!
 
 # Wait for backend to start
@@ -66,6 +66,7 @@ fi
 
 # Start frontend
 echo "Starting React on port 3000..."
+export HOST=localhost
 npm start > ../frontend.log 2>&1 &
 FRONTEND_PID=$!
 

@@ -39,7 +39,8 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
   const [modalType, setModalType] = useState(null); // 'asset' or 'liability'
   const [selectedCategory, setSelectedCategory] = useState(null);
   const [formData, setFormData] = useState({});
-  const [activeTab, setActiveTab] = useState('overview'); // 'overview', 'assets', 'liabilities'
+  const [typeSelectorLinkedEMI, setTypeSelectorLinkedEMI] = useState(null);
+  // Single-page layout (no tabs)
 
   // Load EMIs and data
   useEffect(() => {
@@ -59,7 +60,7 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
       setLoadingEMIs(true);
       const { loans } = await getAllRecurringPayments();
       
-      const emis = loans.map(loan => ({
+      const emisRaw = loans.map(loan => ({
         name: loan.user_label || loan.merchant_source,
         amount: loan.emi_amount,
         count: loan.occurrence_count,
@@ -69,7 +70,17 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
         merchant_source: loan.merchant_source,
         pattern_id: loan.pattern_id
       }));
-      
+
+      // Deduplicate EMIs by stable key (pattern_id if present, else normalized name+amount)
+      const normalize = (s) => (s || '').toLowerCase().replace(/\s+/g, '');
+      const uniqueMap = new Map();
+      for (const e of emisRaw) {
+        const key = e.pattern_id || `${normalize(e.name)}:${Math.round(Number(e.amount) || 0)}`;
+        if (!uniqueMap.has(key)) uniqueMap.set(key, e);
+      }
+
+      const emis = Array.from(uniqueMap.values());
+
       setDetectedEMIs(emis);
     } catch (error) {
       console.error('Error loading EMIs:', error);
@@ -120,15 +131,55 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
   const totalLiabilities = liabilities.reduce((sum, l) => sum + (l.outstanding_balance || l.principal_amount || 0), 0);
   const trueNetWorth = totalAssets - totalLiabilities;
 
+  const openTypeSelector = (type, linkedEMI = null) => {
+    setModalType(type);
+    setSelectedCategory(null);
+    setTypeSelectorLinkedEMI(linkedEMI);
+    setShowAddModal(true);
+  };
+
   const openAddModal = (type, category, linkedEMI = null) => {
     setModalType(type);
     setSelectedCategory(category);
+    // Presets by type
+    const presets = { interestRate: '', rateType: 'fixed', rateResetFrequency: '', originalTenure: '', moratoriumMonths: '', processingFee: '', prepaymentPenaltyPct: '' };
+    if (type === 'liability') {
+      switch (category.id) {
+        case 'home_loan':
+          presets.rateType = 'floating';
+          presets.rateResetFrequency = '6';
+          presets.originalTenure = '240';
+          presets.prepaymentPenaltyPct = '2';
+          break;
+        case 'car_loan':
+          presets.rateType = 'fixed';
+          presets.originalTenure = '60';
+          break;
+        case 'personal_loan':
+          presets.rateType = 'fixed';
+          presets.originalTenure = '36';
+          break;
+        default:
+          break;
+      }
+    }
+
+    const inferredStartDate = linkedEMI?.lastDate ? linkedEMI.lastDate : '';
+
     setFormData({
       name: linkedEMI ? linkedEMI.name.replace(/loan|emi/gi, '').trim() : '',
       value: '',
-      outstandingBalance: linkedEMI ? linkedEMI.amount * 60 : '', // Estimate
+      outstandingBalance: linkedEMI ? linkedEMI.amount * 60 : '',
       emiAmount: linkedEMI ? linkedEMI.amount : '',
       lenderName: linkedEMI ? linkedEMI.merchant_source : '',
+      interestRate: presets.interestRate,
+      rateType: presets.rateType,
+      rateResetFrequency: presets.rateResetFrequency,
+      startDate: inferredStartDate,
+      originalTenure: presets.originalTenure,
+      moratoriumMonths: presets.moratoriumMonths,
+      processingFee: presets.processingFee,
+      prepaymentPenaltyPct: presets.prepaymentPenaltyPct,
       linkedEMI
     });
     setShowAddModal(true);
@@ -155,7 +206,8 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
             asset_type: selectedCategory.id,
             purchase_price: Number(formData.value),
             purchase_date: new Date().toISOString().slice(0, 10),
-            quantity: 1
+            quantity: 1,
+            notes: formData.linkedEMI ? `mapped_from_emi:${formData.linkedEMI.pattern_id}:${formData.linkedEMI.name}` : undefined
           })
         });
       } else {
@@ -171,6 +223,14 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
             liability_type: selectedCategory.id,
             outstanding_balance: Number(formData.outstandingBalance),
             emi_amount: formData.emiAmount ? Number(formData.emiAmount) : undefined,
+            interest_rate: formData.interestRate ? Number(formData.interestRate) : undefined,
+            rate_type: formData.rateType || undefined,
+            rate_reset_frequency_months: formData.rateResetFrequency ? Number(formData.rateResetFrequency) : undefined,
+            start_date: formData.startDate || undefined,
+            original_tenure_months: formData.originalTenure ? Number(formData.originalTenure) : undefined,
+            moratorium_months: formData.moratoriumMonths ? Number(formData.moratoriumMonths) : undefined,
+            processing_fee: formData.processingFee ? Number(formData.processingFee) : undefined,
+            prepayment_penalty_pct: formData.prepaymentPenaltyPct ? Number(formData.prepaymentPenaltyPct) : undefined,
             lender_name: formData.lenderName,
             recurring_pattern_id: formData.linkedEMI?.pattern_id,
             principal_amount: Number(formData.outstandingBalance)
@@ -189,50 +249,57 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
     <div className="min-h-screen bg-gradient-to-br from-pink-50 to-red-50 pb-24">
       {/* Header with Tabs */}
       <div className="bg-white/80 backdrop-blur-md sticky top-0 z-20 border-b border-gray-100">
-        <div className="max-w-lg mx-auto">
-          <div className="px-4 py-4 flex items-center justify-between">
+        <div className="max-w-lg mx-auto px-4 py-4">
+          <div className="flex items-center justify-between">
             <div>
               <div className="text-lg font-bold text-gray-900">Assets & Liabilities</div>
               <div className="text-xs text-gray-500">Your complete financial picture</div>
             </div>
-          </div>
-          
-          {/* Tabs */}
-          <div className="flex px-4 pb-2 gap-2">
-            {['overview', 'assets', 'liabilities'].map(tab => (
+            <div className="flex gap-2">
               <button
-                key={tab}
-                onClick={() => setActiveTab(tab)}
-                className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all ${
-                  activeTab === tab
-                    ? 'bg-gradient-to-r from-pink-500 to-red-500 text-white shadow-md'
-                    : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
+                onClick={() => openTypeSelector('asset')}
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-xs font-semibold hover:shadow-md active:scale-95"
               >
-                {tab.charAt(0).toUpperCase() + tab.slice(1)}
+                + Asset
               </button>
-            ))}
+              <button
+                onClick={() => openTypeSelector('liability')}
+                className="px-3 py-2 rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-semibold hover:shadow-md active:scale-95"
+              >
+                + Liability
+              </button>
+            </div>
+        </div>
+          <div className="mt-3 grid grid-cols-3 gap-2">
+            <div className="rounded-xl bg-blue-50 border border-blue-100 p-3">
+              <div className="text-[10px] text-gray-500">Assets</div>
+              <div className="text-sm font-bold text-blue-600">{assets.length}</div>
+            </div>
+            <div className="rounded-xl bg-red-50 border border-red-100 p-3">
+              <div className="text-[10px] text-gray-500">Liabilities</div>
+              <div className="text-sm font-bold text-red-600">{liabilities.length}</div>
+            </div>
+            <div className={`rounded-xl p-3 border ${trueNetWorth >= 0 ? 'bg-green-50 border-green-100' : 'bg-red-50 border-red-100'}`}>
+              <div className="text-[10px] text-gray-500">True Net Worth</div>
+              <div className={`text-sm font-bold ${trueNetWorth >= 0 ? 'text-green-700' : 'text-red-700'}`}>{formatCurrency(trueNetWorth)}</div>
+            </div>
           </div>
         </div>
       </div>
 
-      <div className="max-w-lg mx-auto px-4 py-6 space-y-4">
-        {/* OVERVIEW TAB */}
-        {activeTab === 'overview' && (
-          <>
-            {/* Net Worth Card */}
-            <div className={`bg-gradient-to-br ${trueNetWorth >= 0 ? 'from-green-50 to-emerald-50 border-green-200' : 'from-red-50 to-pink-50 border-red-200'} rounded-2xl p-5 border-2 shadow-sm`}>
-              <div className="text-xs text-gray-500 mb-1">True Net Worth</div>
-              <div className={`text-4xl font-bold ${trueNetWorth >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                {formatCurrency(trueNetWorth)}
-              </div>
-              <div className="text-xs text-gray-600 mt-2 flex gap-4">
-                <span>Assets: {formatCurrency(totalAssets)}</span>
-                <span>•</span>
-                <span>Liabilities: {formatCurrency(totalLiabilities)}</span>
-              </div>
-            </div>
-
+      <div className="max-w-lg mx-auto px-4 py-6 space-y-5">
+        {/* Summary Card */}
+        <div className={`bg-gradient-to-br ${trueNetWorth >= 0 ? 'from-green-50 to-emerald-50 border-green-200' : 'from-red-50 to-pink-50 border-red-200'} rounded-2xl p-5 border-2 shadow-sm`}>
+          <div className="text-xs text-gray-500 mb-1">True Net Worth</div>
+          <div className={`text-4xl font-bold ${trueNetWorth >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+            {formatCurrency(trueNetWorth)}
+          </div>
+          <div className="text-xs text-gray-600 mt-2 flex gap-4">
+            <span>Assets: {formatCurrency(totalAssets)}</span>
+            <span>•</span>
+            <span>Liabilities: {formatCurrency(totalLiabilities)}</span>
+          </div>
+        </div>
             {/* Quick Stats */}
             <div className="grid grid-cols-2 gap-4">
               <div className="bg-white rounded-2xl p-4 shadow-sm border border-blue-100">
@@ -245,10 +312,10 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
                 <div className="text-2xl font-bold text-red-600">{liabilities.length}</div>
                 <div className="text-xs text-gray-400 mt-1">{formatCurrency(totalLiabilities)}</div>
               </div>
-            </div>
+        </div>
 
-            {/* EMI Suggestions */}
-            {!loadingEMIs && detectedEMIs.length > 0 && (
+        {/* EMI Suggestions */}
+        {!loadingEMIs && detectedEMIs.length > 0 && (
               <div className="bg-gradient-to-br from-orange-50 to-amber-50 rounded-2xl p-5 border border-orange-200 shadow-sm">
                 <div className="flex items-center gap-2 mb-3">
                   <span className="text-2xl">💡</span>
@@ -261,8 +328,18 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
                 </div>
                 <div className="space-y-2">
                   {detectedEMIs.map((emi, idx) => {
-                    const assetMapped = assets.some(a => a.notes?.includes(emi.name));
+                    const normalize = (s) => (s || '').toLowerCase().replace(/\s+/g, '');
+                    const emiKey = normalize(emi.name);
+                    const assetMapped = assets.some(a => {
+                      const notes = a.notes || '';
+                      const nameMatch = normalize(a.name).includes(emiKey);
+                      const notesHasId = emi.pattern_id && notes.includes(emi.pattern_id);
+                      const notesHasName = emi.name && notes.includes(emi.name);
+                      return nameMatch || notesHasId || notesHasName;
+                    });
                     const liabilityMapped = liabilities.some(l => l.recurring_pattern_id === emi.pattern_id);
+                    const backendMappedAs = emi.mapped_as; // 'asset' | 'liability' if provided by API
+                    const isMapped = !!backendMappedAs || assetMapped || liabilityMapped;
                     
                     return (
                       <div key={idx} className="bg-white rounded-xl p-3">
@@ -273,35 +350,23 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
                           </div>
                         </div>
                         <div className="flex gap-2">
-                          {!assetMapped && (
-                            <button
-                              onClick={() => {
-                                const type = emi.name.toLowerCase().includes('home') || emi.name.toLowerCase().includes('canfin')
-                                  ? ASSET_TYPES.find(t => t.id === 'flat')
-                                  : ASSET_TYPES.find(t => t.id === 'car');
-                                openAddModal('asset', type, emi);
-                              }}
-                              className="flex-1 px-3 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-xs font-medium hover:shadow-md active:scale-95 transition-all"
-                            >
-                              + Asset
-                            </button>
+                          {!isMapped && (
+                            <>
+                              <button
+                                onClick={() => openTypeSelector('asset', emi)}
+                                className="flex-1 px-3 py-2 rounded-lg bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-xs font-medium hover:shadow-md active:scale-95 transition-all"
+                              >
+                                + Asset
+                              </button>
+                              <button
+                                onClick={() => openTypeSelector('liability', emi)}
+                                className="flex-1 px-3 py-2 rounded-lg bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-medium hover:shadow-md active:scale-95 transition-all"
+                              >
+                                + Liability
+                              </button>
+                            </>
                           )}
-                          {!liabilityMapped && (
-                            <button
-                              onClick={() => {
-                                const type = emi.name.toLowerCase().includes('home') || emi.name.toLowerCase().includes('canfin')
-                                  ? LIABILITY_TYPES.find(t => t.id === 'home_loan')
-                                  : emi.name.toLowerCase().includes('personal')
-                                  ? LIABILITY_TYPES.find(t => t.id === 'personal_loan')
-                                  : LIABILITY_TYPES.find(t => t.id === 'car_loan');
-                                openAddModal('liability', type, emi);
-                              }}
-                              className="flex-1 px-3 py-2 rounded-lg bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-medium hover:shadow-md active:scale-95 transition-all"
-                            >
-                              + Liability
-                            </button>
-                          )}
-                          {(assetMapped || liabilityMapped) && (
+                          {isMapped && (
                             <div className="flex-1 flex items-center justify-center text-xs text-green-600">
                               ✓ Mapped
                             </div>
@@ -311,63 +376,83 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
                     );
                   })}
                 </div>
-              </div>
-            )}
-          </>
+        </div>
         )}
 
-        {/* ASSETS TAB */}
-        {activeTab === 'assets' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-700">Your Assets</h3>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-xs font-semibold hover:shadow-md active:scale-95"
-              >
-                + Add Asset
-              </button>
+        {/* ASSETS SECTION */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Your Assets</h3>
+            <button
+              onClick={() => openTypeSelector('asset')}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-cyan-500 text-white text-xs font-semibold hover:shadow-md active:scale-95"
+            >
+              + Add Asset
+            </button>
+          </div>
+          {assets.map(asset => (
+            <div key={asset.asset_id} className="bg-white rounded-xl p-4 shadow-sm border border-blue-100">
+              <div className="font-semibold text-gray-900">{asset.name}</div>
+              <div className="text-sm text-blue-600 font-medium mt-1">
+                {formatCurrency(asset.current_value || asset.purchase_price)}
+              </div>
             </div>
-            
-            {assets.map(asset => (
-              <div key={asset.asset_id} className="bg-white rounded-xl p-4 shadow-sm border border-blue-100">
-                <div className="font-semibold text-gray-900">{asset.name}</div>
-                <div className="text-sm text-blue-600 font-medium mt-1">
-                  {formatCurrency(asset.current_value || asset.purchase_price)}
+          ))}
+        </div>
+
+        {/* LIABILITIES SECTION */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold text-gray-700">Your Liabilities</h3>
+            <button
+              onClick={() => openTypeSelector('liability')}
+              className="px-4 py-2 rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-semibold hover:shadow-md active:scale-95"
+            >
+              + Add Liability
+            </button>
+          </div>
+          {liabilities.map(liability => (
+            <div key={liability.liability_id} className="bg-white rounded-xl p-4 shadow-sm border border-red-100">
+              <div className="font-semibold text-gray-900">{liability.name}</div>
+              <div className="text-sm text-red-600 font-medium mt-1">
+                {formatCurrency(liability.outstanding_balance || liability.principal_amount)}
+              </div>
+              {liability.emi_amount && (
+                <div className="text-xs text-gray-500 mt-1">EMI: {formatCurrency(liability.emi_amount)}</div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Type Selection Modal (Step 1) */}
+        {showAddModal && !selectedCategory && modalType && (
+          <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+            <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
+              <div className={`bg-gradient-to-br ${modalType === 'liability' ? 'from-red-500 to-pink-500' : 'from-blue-500 to-cyan-500'} text-white p-6 rounded-t-3xl`}>
+                <div className="flex items-center justify-between">
+                  <div className="text-xl font-bold">Choose {modalType === 'liability' ? 'Liability' : 'Asset'} Type</div>
+                  <button onClick={() => setShowAddModal(false)} className="p-2 rounded-lg hover:bg-white/10">✕</button>
                 </div>
               </div>
-            ))}
+              <div className="p-6">
+                <div className="grid grid-cols-2 gap-3">
+                  {(modalType === 'liability' ? LIABILITY_TYPES : ASSET_TYPES).map(type => (
+                    <button
+                      key={type.id}
+                      onClick={() => openAddModal(modalType, type, typeSelectorLinkedEMI)}
+                      className={`bg-gradient-to-br ${type.color} rounded-2xl p-4 text-left text-white hover:shadow-lg active:scale-95 transition-all`}
+                    >
+                      <div className="text-3xl mb-2">{type.icon}</div>
+                      <div className="text-xs font-semibold">{type.label}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* LIABILITIES TAB */}
-        {activeTab === 'liabilities' && (
-          <div className="space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-gray-700">Your Liabilities</h3>
-              <button
-                onClick={() => setShowAddModal(true)}
-                className="px-4 py-2 rounded-xl bg-gradient-to-r from-red-500 to-pink-500 text-white text-xs font-semibold hover:shadow-md active:scale-95"
-              >
-                + Add Liability
-              </button>
-            </div>
-            
-            {liabilities.map(liability => (
-              <div key={liability.liability_id} className="bg-white rounded-xl p-4 shadow-sm border border-red-100">
-                <div className="font-semibold text-gray-900">{liability.name}</div>
-                <div className="text-sm text-red-600 font-medium mt-1">
-                  {formatCurrency(liability.outstanding_balance || liability.principal_amount)}
-                </div>
-                {liability.emi_amount && (
-                  <div className="text-xs text-gray-500 mt-1">EMI: {formatCurrency(liability.emi_amount)}</div>
-                )}
-              </div>
-            ))}
-          </div>
-        )}
-
-        {/* Add Modal */}
+        {/* Add Modal (Step 2: Details) */}
         {showAddModal && selectedCategory && (
           <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4">
             <div className="bg-white rounded-3xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -433,6 +518,92 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
                         value={formData.emiAmount}
                         onChange={(e) => setFormData({ ...formData, emiAmount: e.target.value })}
                         className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Interest Rate %</label>
+                      <input
+                        type="number"
+                        value={formData.interestRate}
+                        onChange={(e) => setFormData({ ...formData, interestRate: e.target.value })}
+                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        placeholder="e.g., 9.0"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Rate Type</label>
+                        <select
+                          value={formData.rateType}
+                          onChange={(e) => setFormData({ ...formData, rateType: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        >
+                          <option value="fixed">Fixed</option>
+                          <option value="floating">Floating</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Rate Reset Freq (Months)</label>
+                        <input
+                          type="number"
+                          value={formData.rateResetFrequency}
+                          onChange={(e) => setFormData({ ...formData, rateResetFrequency: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                          placeholder="e.g., 6"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Start Date</label>
+                        <input
+                          type="date"
+                          value={formData.startDate}
+                          onChange={(e) => setFormData({ ...formData, startDate: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Tenure (Months)</label>
+                        <input
+                          type="number"
+                          value={formData.originalTenure}
+                          onChange={(e) => setFormData({ ...formData, originalTenure: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                          placeholder="e.g., 240"
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Moratorium (Months)</label>
+                        <input
+                          type="number"
+                          value={formData.moratoriumMonths}
+                          onChange={(e) => setFormData({ ...formData, moratoriumMonths: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                          placeholder="e.g., 3"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-1">Processing Fee</label>
+                        <input
+                          type="number"
+                          value={formData.processingFee}
+                          onChange={(e) => setFormData({ ...formData, processingFee: e.target.value })}
+                          className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                          placeholder="e.g., 2500"
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-1">Prepayment Penalty %</label>
+                      <input
+                        type="number"
+                        value={formData.prepaymentPenaltyPct}
+                        onChange={(e) => setFormData({ ...formData, prepaymentPenaltyPct: e.target.value })}
+                        className="w-full px-4 py-3 rounded-xl border border-gray-200 focus:outline-none focus:ring-2 focus:ring-red-500"
+                        placeholder="e.g., 2"
                       />
                     </div>
                     <div>

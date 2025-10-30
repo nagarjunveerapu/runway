@@ -1,6 +1,6 @@
 // src/components/Modern/NetWorthTimelineEnhanced.jsx
-import React, { useState, useEffect, useRef } from 'react';
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from 'recharts';
+import React, { useState, useEffect } from 'react';
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, ReferenceLine } from 'recharts';
 import { getNetWorthTimeline, getNetWorthProjection } from '../../api/services/netWorth';
 
 /**

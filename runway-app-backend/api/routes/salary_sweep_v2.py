@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import User, Transaction, SalarySweepConfig, DetectedEMIPattern
+from storage.models import User, Transaction, SalarySweepConfig, DetectedEMIPattern, Asset, Liability
 from auth.dependencies import get_current_user, get_db
 from config import Config
 from ml.categorizer import MLCategorizer
@@ -57,6 +57,8 @@ class EMIPatternResponse(BaseModel):
     transaction_ids: List[str]
     first_detected_date: str
     last_detected_date: str
+    mapped_as: Optional[str] = None
+    mapped_entity_id: Optional[str] = None
 
 
 class SalaryResponse(BaseModel):
@@ -1543,6 +1545,29 @@ async def get_recurring_payments_by_category(
         government_schemes = []
 
         for pattern in all_patterns:
+            # Determine mapping status from liabilities/assets
+            mapped_as = None
+            mapped_entity_id = None
+            # Liability mapping via recurring_pattern_id
+            mapped_liability = session.query(Liability).filter(
+                Liability.user_id == current_user.user_id,
+                Liability.recurring_pattern_id == pattern.pattern_id
+            ).first()
+            if mapped_liability:
+                mapped_as = 'liability'
+                mapped_entity_id = mapped_liability.liability_id
+            else:
+                # Asset mapping via notes contains pattern_id
+                mapped_asset = session.query(Asset).filter(
+                    Asset.user_id == current_user.user_id,
+                    Asset.notes.isnot(None)
+                ).all()
+                for a in mapped_asset:
+                    if a.notes and pattern.pattern_id in str(a.notes):
+                        mapped_as = 'asset'
+                        mapped_entity_id = a.asset_id
+                        break
+
             emi_response = EMIPatternResponse(
                 pattern_id=pattern.pattern_id,
                 merchant_source=pattern.merchant_source,
@@ -1556,7 +1581,9 @@ async def get_recurring_payments_by_category(
                 suggestion_reason=pattern.suggestion_reason,
                 transaction_ids=pattern.transaction_ids or [],
                 first_detected_date=pattern.first_detected_date,
-                last_detected_date=pattern.last_detected_date
+                last_detected_date=pattern.last_detected_date,
+                mapped_as=mapped_as,
+                mapped_entity_id=mapped_entity_id
             )
 
             if pattern.category == 'Loan':

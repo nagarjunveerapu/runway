@@ -423,6 +423,11 @@ class Liability(Base):
     outstanding_balance = Column(Float)  # Current outstanding balance
     interest_rate = Column(Float)  # Annual interest rate (%)
     emi_amount = Column(Float)  # Monthly EMI payment
+    # Rate and fees
+    rate_type = Column(String(20))  # fixed | floating
+    rate_reset_frequency_months = Column(Integer)  # For floating rates
+    processing_fee = Column(Float)  # One-time fee
+    prepayment_penalty_pct = Column(Float)  # % of prepaid amount
 
     # Tenure details
     original_tenure_months = Column(Integer)  # Total original loan tenure in months
@@ -434,7 +439,12 @@ class Liability(Base):
     # Metadata
     start_date = Column(DateTime)  # Loan start date
     end_date = Column(DateTime)  # Expected loan end date (start_date + original_tenure_months)
+    last_rate_reset_date = Column(DateTime)  # For floating rate last reset
+    moratorium_months = Column(Integer)  # Months with no principal payment
     lender_name = Column(String(255))  # Bank/NBFC name
+    status = Column(String(20), default='active')  # active | closed
+    closure_date = Column(DateTime)
+    closure_reason = Column(String(255))
     
     # Timestamps
     created_at = Column(DateTime, default=datetime.now)
