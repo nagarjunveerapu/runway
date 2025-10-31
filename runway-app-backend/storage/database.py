@@ -323,19 +323,43 @@ class DatabaseManager:
                 func.sum(Transaction.amount)
             ).scalar() or 0.0
 
-            # By category
+            # By category with debit/credit netting
             category_breakdown = {}
-            category_results = query.with_entities(
-                Transaction.category,
-                func.count(Transaction.transaction_id),
-                func.sum(Transaction.amount)
-            ).group_by(Transaction.category).all()
-
-            for category, count, total in category_results:
-                category_breakdown[category or 'Unknown'] = {
-                    'count': count,
-                    'total': float(total) if total else 0.0
-                }
+            
+            # Get all transactions for detailed processing
+            transactions = query.all()
+            
+            # Group by category and merchant for netting
+            category_merchant_totals = {}
+            category_counts = {}
+            
+            for txn in transactions:
+                # Skip EMI-converted transactions
+                extra_metadata = txn.extra_metadata or {}
+                if extra_metadata.get('emi_converted'):
+                    continue
+                
+                category = txn.category or 'Unknown'
+                merchant = txn.merchant_canonical or 'Unknown'
+                key = (category, merchant)
+                
+                if key not in category_merchant_totals:
+                    category_merchant_totals[key] = {'debit': 0.0, 'credit': 0.0}
+                
+                if txn.type == 'debit':
+                    category_merchant_totals[key]['debit'] += txn.amount
+                    category_counts[category] = category_counts.get(category, 0) + 1
+                elif txn.type == 'credit':
+                    category_merchant_totals[key]['credit'] += txn.amount
+            
+            # Calculate net totals per category (debit - credit)
+            for (category, merchant), amounts in category_merchant_totals.items():
+                net_amount = amounts['debit'] - amounts['credit']
+                if net_amount > 0:  # Only show if net spending is positive
+                    if category not in category_breakdown:
+                        category_breakdown[category] = {'count': 0, 'total': 0.0}
+                    category_breakdown[category]['total'] += net_amount
+                    category_breakdown[category]['count'] = category_counts.get(category, 0)
 
             # Date range
             date_range = query.with_entities(

@@ -86,16 +86,37 @@ async def get_category_breakdown(
             end_date=end_date
         )
 
-        # Calculate category breakdown
+        # Calculate category breakdown with debit/credit netting
+        # Group by category and merchant to handle cases where a merchant has both debit and credit
+        category_merchant_totals = defaultdict(lambda: {'debit': 0.0, 'credit': 0.0})
+        category_counts = defaultdict(int)
+        
+        for txn in transactions:
+            # Skip EMI-converted transactions (these were converted from purchase to EMI)
+            extra_metadata = txn.extra_metadata or {}
+            if extra_metadata.get('emi_converted'):
+                continue
+            
+            category = txn.category or "Unknown"
+            merchant = txn.merchant_canonical or "Unknown"
+            key = (category, merchant)
+            
+            if txn.type == 'debit':
+                category_merchant_totals[key]['debit'] += txn.amount
+                category_counts[category] += 1
+            elif txn.type == 'credit':
+                category_merchant_totals[key]['credit'] += txn.amount
+
+        # Calculate net totals per category (debit - credit)
         category_totals = defaultdict(lambda: {'count': 0, 'total': 0.0})
         total_amount = 0.0
-
-        for txn in transactions:
-            if txn.type == 'debit':  # Only count debits for spending
-                category = txn.category or "Unknown"
-                category_totals[category]['count'] += 1
-                category_totals[category]['total'] += txn.amount
-                total_amount += txn.amount
+        
+        for (category, merchant), amounts in category_merchant_totals.items():
+            net_amount = amounts['debit'] - amounts['credit']
+            if net_amount > 0:  # Only show if net spending is positive
+                category_totals[category]['total'] += net_amount
+                category_totals[category]['count'] = category_counts[category]
+                total_amount += net_amount
 
         # Convert to response format
         breakdown = []
@@ -303,6 +324,11 @@ async def get_comprehensive_analytics(
 
         for txn in transactions:
             if txn.type == 'debit':
+                # Skip EMI-converted transactions (these were converted from purchase to EMI)
+                extra_metadata = txn.extra_metadata or {}
+                if extra_metadata.get('emi_converted'):
+                    continue
+                
                 # Category
                 category = txn.category or "Unknown"
                 category_totals[category]['count'] += 1

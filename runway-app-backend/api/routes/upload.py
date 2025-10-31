@@ -54,7 +54,7 @@ async def upload_csv(file: UploadFile = File(...)):
 
     Returns summary of import operation
     """
-    if not file.filename.endswith('.csv'):
+    if not file.filename.lower().endswith('.csv'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only CSV files are supported"
@@ -90,12 +90,13 @@ async def upload_csv(file: UploadFile = File(...)):
             merchant_canonical, score = merchant_norm.normalize(merchant_raw)
             txn['merchant_canonical'] = merchant_canonical
 
-            # Categorize
-            category = rule_based_category(
+            # Categorize (returns primary category and optional sub-type)
+            category, transaction_sub_type = rule_based_category(
                 txn.get('remark', ''),
                 merchant_canonical
             )
             txn['category'] = category
+            txn['transaction_sub_type'] = transaction_sub_type
 
         # Detect duplicates
         dedup = DeduplicationDetector(
@@ -188,7 +189,7 @@ async def upload_bulk_files(files: List[UploadFile] = File(...)):
 
     for file in files:
         try:
-            if not file.filename.endswith('.csv'):
+            if not file.filename.lower().endswith('.csv'):
                 errors.append(f"{file.filename}: Not a CSV file")
                 continue
 
@@ -233,7 +234,7 @@ async def upload_pdf(
 
     Returns summary of import operation
     """
-    if not file.filename.endswith('.pdf'):
+    if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only PDF files are supported"
@@ -273,12 +274,13 @@ async def upload_pdf(
             merchant_canonical, score = merchant_norm.normalize(merchant_raw)
             txn['merchant_canonical'] = merchant_canonical
 
-            # Categorize
-            category = rule_based_category(
+            # Categorize (returns primary category and optional sub-type)
+            category, transaction_sub_type = rule_based_category(
                 description,
                 merchant_canonical
             )
             txn['category'] = category
+            txn['transaction_sub_type'] = transaction_sub_type
 
         # Skip in-memory deduplication - database unique constraint handles duplicates
         # The DeduplicationDetector is for pattern detection (EMIs/SIPs), not for preventing database duplicates

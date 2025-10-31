@@ -22,6 +22,7 @@ from fastapi import UploadFile
 from services.parser_service.parser_factory import ParserFactory
 from services.parser_service.transaction_repository import TransactionRepository
 from services.parser_service.transaction_enrichment_service import TransactionEnrichmentService
+from services.credit_card_service import CreditCardService
 from storage.database import DatabaseManager
 from storage.models import Account
 import uuid
@@ -50,6 +51,7 @@ class ParserService:
         self.db_manager = db_manager
         self.transaction_repository = TransactionRepository(db_manager)
         self.enrichment_service = TransactionEnrichmentService()
+        self.credit_card_service = CreditCardService(db_manager)
     
     def process_uploaded_file(
         self,
@@ -179,19 +181,32 @@ class ParserService:
             metadata_has_info = (
                 metadata.get('account_number') or 
                 metadata.get('bank_name') or 
-                metadata.get('account_holder_name')
+                metadata.get('account_holder_name') or
+                metadata.get('card_last_4_digits')
             )
             
             if not account_id and auto_create_account:
+                # Check if this is a credit card statement
+                is_credit_card = metadata.get('account_type') == 'credit_card'
+                
                 if metadata_has_info:
-                    logger.info(f"🔄 Creating/updating account from metadata...")
-                    account_id = self._create_or_update_account_from_metadata(
-                        user_id=user_id,
-                        metadata=metadata,
-                        bank_name=bank_name
-                    )
-                    if account_id:
-                        logger.info(f"✅ Created/updated account from metadata: {account_id}")
+                    if is_credit_card:
+                        logger.info(f"💳 Creating/updating credit card account from metadata...")
+                        account_id = self.credit_card_service.create_or_update_credit_card_account(
+                            user_id=user_id,
+                            metadata=metadata
+                        )
+                        if account_id:
+                            logger.info(f"✅ Created/updated credit card account: {account_id}")
+                    else:
+                        logger.info(f"🔄 Creating/updating account from metadata...")
+                        account_id = self._create_or_update_account_from_metadata(
+                            user_id=user_id,
+                            metadata=metadata,
+                            bank_name=bank_name
+                        )
+                        if account_id:
+                            logger.info(f"✅ Created/updated account from metadata: {account_id}")
                 else:
                     # If no metadata but auto_create_account is True, create a default account
                     logger.info(f"⚠️  No metadata found, creating default account...")
@@ -215,8 +230,10 @@ class ParserService:
             # Enrich transactions (merchant normalization, categorization)
             # NOTE: We don't run deduplication here - the database unique constraint handles it
             # Deduplication logic is only used for EMI/SIP pattern detection, not for duplicates
-            enriched_transactions = self.enrichment_service.enrich_transactions(transactions)
-            logger.info(f"✅ Enriched {len(enriched_transactions)} transactions")
+            # Use enrich_and_deduplicate to get EMI conversion detection
+            enriched_transactions, dedup_stats = self.enrichment_service.enrich_and_deduplicate(transactions)
+            emi_converted_count = dedup_stats.get('emi_converted_count', 0)
+            logger.info(f"✅ Enriched {len(enriched_transactions)} transactions (EMI conversions: {emi_converted_count})")
             
             # Step 6: Persist to database
             logger.info("\n[STEP 6] 💾 TRANSACTION REPOSITORY: Persisting to database...")
@@ -228,6 +245,24 @@ class ParserService:
             )
             
             logger.info(f"✅ Successfully imported {inserted_count}/{len(enriched_transactions)} transactions")
+            
+            # Create credit card statement record if this is a credit card statement
+            if metadata.get('account_type') == 'credit_card' and account_id:
+                logger.info("\n💳 Creating credit card statement record...")
+                source_type = 'csv' if file.filename.lower().endswith('.csv') else 'pdf'
+                
+                # Add transaction count to metadata
+                metadata_with_count = {**metadata, 'transaction_count': len(transactions)}
+                
+                statement_id = self.credit_card_service.create_credit_card_statement_record(
+                    user_id=user_id,
+                    account_id=account_id,
+                    metadata=metadata_with_count,
+                    filename=file.filename,
+                    source_type=source_type
+                )
+                if statement_id:
+                    logger.info(f"✅ Created credit card statement record: {statement_id}")
             
             logger.info("\n" + "=" * 80)
             logger.info("✅ PARSER SERVICE: File processing completed successfully!")

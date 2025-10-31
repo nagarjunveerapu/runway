@@ -115,7 +115,9 @@ def enrich_transactions(txs: List[dict]) -> List[dict]:
 
     # Classify
     for t in enriched_txs:
-        t['category'] = classifier.rule_based_category(t.get('remark', ''), t.get('merchant'))
+        category, transaction_sub_type = classifier.rule_based_category(t.get('remark', ''), t.get('merchant'))
+        t['category'] = category
+        t['transaction_sub_type'] = transaction_sub_type
         
         # Post-classification: Group person-to-person transfers to protect PII
         # Check if this looks like a personal transfer

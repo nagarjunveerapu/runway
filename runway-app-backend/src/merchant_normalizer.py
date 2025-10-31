@@ -26,10 +26,12 @@ CANONICAL_MERCHANTS: List[str] = [
     "SBI Life",
     "State Bank Life",
     "Life Insurance",
+    "Payment",
+    "BBPS Payment",
+    "Infinity Payment",
 
     # IT Companies & Employers (for salary identification)
     "Infosys",
-    "INFY",
     "TCS",
     "Tata Consultancy Services",
     "Wipro",
@@ -76,6 +78,16 @@ CANONICAL_MERCHANTS: List[str] = [
     "IndianOil",
     "BPCL Petro",
     "Bharat Gas",
+    
+    # Education
+    "HDFC School",
+    "Ample Technologies",
+    "VFS Global",
+    "Tutorials Dojo",
+    "PVR INOX",
+    
+    # Retail
+    "Reliance Retail",
 ]
 
 
@@ -102,9 +114,20 @@ class MerchantNormalizer:
             canonical_words = [w for w in canonical_lower.split() if w not in common_words and len(w) >= 3]
 
             # Check if the first significant word of canonical matches start of raw
+            # Use word boundaries to avoid false matches (e.g., "tech" in "technology")
             if canonical_words:
                 first_word = canonical_words[0]
-                if raw_lower.startswith(first_word) or f' {first_word}' in raw_lower or f'/{first_word}' in raw_lower:
+                raw_words = raw_lower.split()
+                
+                # Only match if there are at least 2 significant words in canonical
+                # to avoid false matches (e.g., "Reliance" matching "Reliance Petroleum" when actual is "Reliance Retail")
+                if len(canonical_words) >= 2 and raw_words:
+                    # Check if at least 2 words match (not just the first)
+                    matching_words = sum(1 for w in canonical_words if w in raw_words)
+                    if matching_words >= 2:
+                        return canonical, 90
+                # For single-word canonicals, only match if it's exact first word
+                elif raw_words and raw_words[0] == first_word:
                     return canonical, 90
 
         # use rapidfuzz to get best match

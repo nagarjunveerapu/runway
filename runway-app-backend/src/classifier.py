@@ -17,6 +17,44 @@ KEYWORD_CATEGORY_MAP: Dict[str, str] = {
     'pharmacy': 'Pharmacy',
     'apollo': 'Pharmacy',
     'netflix': 'Subscriptions',
+    # Entertainment & Cinema
+    'pvr': 'Entertainment',
+    'inox': 'Entertainment',
+    'carnival': 'Entertainment',
+    'cinema': 'Entertainment',
+    'movie': 'Entertainment',
+    'crown': 'Entertainment',
+    'multiplex': 'Entertainment',
+    'fun': 'Entertainment',
+    'asian': 'Entertainment',
+    'spi': 'Entertainment',
+    'cinepolis': 'Entertainment',
+    'big': 'Entertainment',
+    'sungold': 'Entertainment',
+    'regal': 'Entertainment',
+    # Education
+    'school': 'Education',
+    'tutorial': 'Education',
+    'tuition': 'Education',
+    'academy': 'Education',
+    'classes': 'Education',
+    'coaching': 'Education',
+    'institute': 'Education',
+    'university': 'Education',
+    'college': 'Education',
+    'education': 'Education',
+    'online course': 'Education',
+    'course': 'Education',
+    'training': 'Education',
+    'vfs global': 'Education',
+    'vfsglobal': 'Education',
+    'emeritus': 'Education',
+    'coursera': 'Education',
+    'udemy': 'Education',
+    'edx': 'Education',
+    'skillshare': 'Education',
+    'masterclass': 'Education',
+    'simplilearn': 'Education',
     'swiggy': 'Food',
     'zomato': 'Food',
     'zepto': 'Food',
@@ -124,6 +162,8 @@ KEYWORD_CATEGORY_MAP: Dict[str, str] = {
     'cc payment': 'Credit Card Payment',
     'card dues': 'Credit Card Payment',
     'card statement': 'Credit Card Payment',
+    'infinity payment': 'Credit Card Payment',
+    'bbps payment': 'Credit Card Payment',
     # Real Estate
     'realtors': 'Real Estate',
     'realtor': 'Real Estate',
@@ -138,63 +178,92 @@ KEYWORD_CATEGORY_MAP: Dict[str, str] = {
 }
 
 
-def rule_based_category(remark: str, merchant: Optional[str] = None) -> str:
+def rule_based_category(remark: str, merchant: Optional[str] = None) -> Tuple[str, Optional[str]]:
+    """
+    Classify transaction with primary category and optional sub-type.
+    
+    Returns:
+        Tuple of (primary_category, transaction_sub_type)
+        - primary_category: Main category (Education, Food, etc.)
+        - transaction_sub_type: Additional classification (EMI/Loan, Credit Card Payment, etc.)
+    """
     if not remark:
-        return 'Other'
+        return ('Other', None)
     s = remark.lower()
+    
+    # Track EMI and Credit Card Payment status
+    has_emi = False
+    is_credit_card_payment = False
+    
+    # Check for EMI/Loan patterns
+    emi_keywords = ['emi', 'loan', 'installment', 'amortization', 'canfin', 'principal amount', 'interest amount']
+    has_emi = any(keyword in s for keyword in emi_keywords)
+    
+    # Check for credit card payment patterns
+    credit_card_patterns = [
+        'cc payment', 'card payment', 'credit card', 'card pay', 'card dues', 
+        'card statement', 'card bill', 'cc bill', 'card repayment', 'infinity payment', 'bbps payment'
+    ]
+    credit_card_banks = ['axis bank', 'hdfc bank', 'icici bank', 'sbi bank', 'kotak bank', 'indusind bank', 
+                          'yes bank', 'rbl bank', 'standard chartered', 'hsbc']
+    
+    has_card_keyword = any(pattern in s for pattern in credit_card_patterns)
+    has_card_bank = any(bank in s for bank in credit_card_banks)
+    exclude_keywords = ['securities', 'investment', 'sip', 'mutual fund', 'demat', 'school', 'college', 'university',
+                       'tutorial', 'tuition', 'academy', 'coaching', 'institute', 'hospital', 'hotel', 'restaurant', 
+                       'retail', 'store', 'supermarket', 'mall']
+    has_exclude = any(exclude in s for exclude in exclude_keywords)
+    
+    is_credit_card_payment = has_card_keyword or (has_card_bank and not has_exclude)
+    
+    # Determine primary category (excluding EMI and card keywords)
+    category = None
     
     # FIRST: Check for highway/toll keywords (before generic 'sip' matching)
     highway_keywords = ['fastag', 'sipg', 'toll', 'highway', 'nh', 'nhtr', 'mytoll']
     for keyword in highway_keywords:
         if keyword in s or (merchant and keyword in merchant.lower()):
-            return 'Transport'
-    
-    # SECOND: Check for credit card payment patterns (before generic bank matching)
-    # Detect bank names with credit card context
-    credit_card_patterns = [
-        'cc payment', 'card payment', 'credit card', 'card pay', 'card dues', 
-        'card statement', 'card bill', 'cc bill', 'card repayment'
-    ]
-    
-    # Indian banks that issue credit cards
-    credit_card_banks = ['axis', 'hdfc', 'icici', 'sbi', 'kotak', 'indusind', 
-                          'yes bank', 'rbl', 'standard chartered', 'hsbc']
-    
-    # Check if remark contains credit card keywords
-    has_card_keyword = any(pattern in s for pattern in credit_card_patterns)
-    has_card_bank = any(bank in s for bank in credit_card_banks)
-    
-    # If it's a debit transaction to a bank and has no investment/securities context,
-    # likely a credit card payment
-    if has_card_keyword or (has_card_bank and not any(x in s for x in ['securities', 'investment', 'sip', 'mutual fund', 'demat'])):
-        return 'Credit Card Payment'
+            category = 'Transport'
+            break
     
     # merchant first
-    if merchant:
+    if not category and merchant:
         m = merchant.lower()
         for k, cat in KEYWORD_CATEGORY_MAP.items():
             if k in m:
-                return cat
-    for k, cat in KEYWORD_CATEGORY_MAP.items():
-        if k in s:
-            return cat
+                category = cat
+                break
+    if not category:
+        for k, cat in KEYWORD_CATEGORY_MAP.items():
+            if k in s:
+                category = cat
+                break
+    
     # Special handling for person-to-person transfers
-    # Check if merchant looks like a person name (all caps, usually 3-5 words)
-    if merchant and merchant.strip():
+    if not category and merchant and merchant.strip():
         merchant_words = merchant.strip().split()
-        # If merchant has 2-4 words and all are uppercase/lowercase, likely a person name
         if 2 <= len(merchant_words) <= 4:
-            # Check if all words are alphanumeric (not company names with "/", "PVT", "LTD", etc.)
             if not any(word in ['PVT', 'LTD', 'LIMITED', 'CORP', 'CO', 'INC'] for word in merchant_words):
-                # Check if it contains common person name indicators or UPI patterns
                 if any(indicator in s for indicator in ['payment fr', 'payment to', 'q', '@', 'upi/']):
-                    return 'Person Transfer'
+                    category = 'Person Transfer'
+    
     # fallback heuristics
-    if 'bill' in s or 'bill' in (merchant or '').lower():
-        return 'Bills'
-    if 'cash wdl' in s or 'withdraw' in s:
-        return 'Cash Withdrawal'
-    return 'Other'
+    if not category:
+        if 'bill' in s or 'bill' in (merchant or '').lower():
+            category = 'Bills'
+        elif 'cash wdl' in s or 'withdraw' in s:
+            category = 'Cash Withdrawal'
+        else:
+            category = 'Other'
+    
+    # Determine transaction sub-type
+    sub_type = None
+    if has_emi:
+        sub_type = 'EMI/Loan'
+    elif is_credit_card_payment:
+        sub_type = 'Credit Card Payment'
+    
+    return (category, sub_type)
 
 
 class MLClassifier:

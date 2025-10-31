@@ -163,7 +163,7 @@ async def health_check():
 # ============================================================================
 
 # Import route modules
-from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, fire_calculator, dashboard, emergency_fund, investment_optimizer, net_worth_timeline
+from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, fire_calculator, dashboard, emergency_fund, investment_optimizer, net_worth_timeline, credit_cards
 
 # Register routers
 app.include_router(
@@ -278,6 +278,12 @@ app.include_router(
     net_worth_timeline.router,
     prefix="/api/v1/net-worth",
     tags=["Net Worth Timeline"]
+)
+
+app.include_router(
+    credit_cards.router,
+    prefix="/api/v1/credit-cards",
+    tags=["Credit Cards"]
 )
 
 

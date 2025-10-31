@@ -27,6 +27,7 @@ from auth.dependencies import get_current_user, get_db
 from config import Config
 from ml.categorizer import MLCategorizer
 from services.investment_detection import InvestmentDetector
+from services.salary_sweep_service import SalarySweepService
 
 logger = logging.getLogger(__name__)
 
@@ -133,171 +134,51 @@ class ConfigResponse(BaseModel):
 # Helper Functions
 # ============================================================================
 
+# Helper function wrappers for compatibility - these delegate to the service
+# These are kept for backward compatibility with existing route code
 def categorize_recurring_payment(merchant: str, description: str) -> tuple[str, str]:
-    """
-    Determine category and subcategory for a recurring payment
-
-    Returns: (category, subcategory)
-    - category: 'Loan', 'Insurance', 'Investment', 'Government Scheme'
-    - subcategory: More specific classification
-    """
-    merchant_lower = (merchant or '').lower()
-    description_lower = (description or '').lower()
-
-    # Check LOAN/EMI
-    loan_merchants = ['canfin', 'bajaj finserv', 'bajaj finance', 'tata capital', 'fullerton',
-                     'iifl', 'mahindra finance', 'cholamandalam', 'l&t finance', 'lic housing',
-                     'dhfl', 'indiabulls', 'hdfc bank', 'icici bank', 'sbi']
-    loan_keywords = ['emi', 'loan', 'housing', 'mortgage', 'auto loan', 'car loan', 'personal loan',
-                    'home loan', 'canfinhomesltd', 'housingloan']
-
-    if any(lender in merchant_lower for lender in loan_merchants):
-        # Determine loan type
-        if any(kw in description_lower for kw in ['home', 'housing', 'canfin']):
-            return ('Loan', 'Home Loan')
-        elif any(kw in description_lower for kw in ['car', 'auto', 'vehicle']):
-            return ('Loan', 'Auto Loan')
-        elif any(kw in description_lower for kw in ['personal', 'pl ']):
-            return ('Loan', 'Personal Loan')
-        else:
-            return ('Loan', 'EMI')
-
-    if any(kw in description_lower for kw in loan_keywords):
-        if any(kw in description_lower for kw in ['home', 'housing']):
-            return ('Loan', 'Home Loan')
-        elif any(kw in description_lower for kw in ['car', 'auto']):
-            return ('Loan', 'Auto Loan')
-        elif any(kw in description_lower for kw in ['personal']):
-            return ('Loan', 'Personal Loan')
-        else:
-            return ('Loan', 'EMI')
-
-    # Check INSURANCE
-    insurance_keywords = ['sbi life', 'lic', 'hdfc life', 'icici prudential', 'max life',
-                         'bajaj allianz', 'tata aia', 'birla sun life', 'insurance',
-                         'kotak life', 'pnb metlife', 'star health', 'care health',
-                         'religare health', 'aditya birla health', 'niva bupa']
-    if any(kw in merchant_lower or kw in description_lower for kw in insurance_keywords):
-        if any(kw in description_lower for kw in ['health', 'mediclaim']):
-            return ('Insurance', 'Health Insurance')
-        elif any(kw in description_lower for kw in ['life', 'term']):
-            return ('Insurance', 'Life Insurance')
-        else:
-            return ('Insurance', 'Insurance Premium')
-
-    # Check INVESTMENT (Mutual Funds, SIP)
-    # Use shared detector for investment signals
-    if InvestmentDetector.is_investment_text(f"{merchant_lower} {description_lower}"):
-        if any(kw in description_lower for kw in ['sip', 'systematic']):
-            return ('Investment', 'Mutual Fund SIP')
-        else:
-            return ('Investment', 'Investment')
-
-    # Check GOVERNMENT SCHEME
-    govt_keywords = ['apy', 'atal pension', 'nps', 'national pension', 'ppf',
-                    'public provident', 'epf', 'employee provident', 'esi',
-                    'employee state insurance', 'sukanya samriddhi', 'pmjjby',
-                    'pmsby', 'pm jeevan', 'pm suraksha']
-    if any(kw in merchant_lower or kw in description_lower for kw in govt_keywords):
-        if any(kw in description_lower for kw in ['apy', 'atal pension']):
-            return ('Government Scheme', 'APY')
-        elif any(kw in description_lower for kw in ['nps', 'national pension']):
-            return ('Government Scheme', 'NPS')
-        elif any(kw in description_lower for kw in ['ppf', 'public provident']):
-            return ('Government Scheme', 'PPF')
-        elif any(kw in description_lower for kw in ['epf', 'employee provident']):
-            return ('Government Scheme', 'EPF')
-        else:
-            return ('Government Scheme', 'Govt Scheme')
-
-    # Default to Loan if we can't determine (for backward compatibility)
-    return ('Loan', 'Recurring Payment')
+    """Determine category and subcategory for a recurring payment. Delegates to SalarySweepService."""
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    return service.categorize_recurring_payment(merchant, description)
 
 
 def _keyword_sets():
     """Central source of keyword lists for categorization."""
-    return {
-        'exclude_merchant': ['sweep', 'transfer', 'ndr fruits'],
-        'exclude_desc': ['upi/', 'paytm'],
-        # Domain-specific exclusions that frequently cause false positives
-        'exclude_investment_desc': ['fastag', 'fast tag', 'toll', 'parking', 'metro card', 'recharge fastag', 'npci fastag', 'hdfc fastag', 'icici fastag', 'sbi fastag'],
-        'loan_merchants': [
-            'canfin', 'bajaj finserv', 'bajaj finance', 'tata capital', 'fullerton',
-            'iifl', 'mahindra finance', 'cholamandalam', 'l&t finance', 'lic housing',
-            'dhfl', 'indiabulls', 'housing finance'
-        ],
-        'loan_desc': [
-            'emi', 'personal loan', 'home loan', 'car loan', 'auto loan',
-            'housing loan', 'loan emi', 'canfinhomesltd', 'housingloan'
-        ],
-        'insurance': [
-            'sbi life', 'lic', 'hdfc life', 'icici prudential', 'max life',
-            'bajaj allianz', 'tata aia', 'birla sun life', 'insurance',
-            'kotak life', 'pnb metlife', 'star health', 'care health',
-            'religare health', 'aditya birla health', 'niva bupa'
-        ],
-        'investment': [
-            'mutual fund', 'sip', 'systematic', 'zerodha', 'groww', 'paytm money',
-            'et money', 'kuvera', 'coin dcb', 'hdfc mf', 'icici prudential mf',
-            'sbi mf', 'axis mf', 'kotak mf', 'nippon india', 'franklin templeton'
-        ],
-        'govt': [
-            'apy', 'atal pension', 'nps', 'national pension', 'ppf', 'public provident',
-            'epf', 'employee provident', 'esi', 'employee state insurance',
-            'sukanya samriddhi', 'pmjjby', 'pmsby', 'pm jeevan', 'pm suraksha'
-        ],
-    }
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    return service._keyword_sets()
 
 
 def _classify_financial_flags(merchant_lower: str, description_lower: str) -> tuple[bool, bool, bool, bool]:
     """Return tuple flags for (is_loan, is_insurance, is_investment, is_govt)."""
-    ks = _keyword_sets()
-    is_loan = (
-        any(l in merchant_lower for l in ks['loan_merchants']) or
-        any(k in description_lower for k in ks['loan_desc'])
-    )
-    is_insurance = any(k in merchant_lower or k in description_lower for k in ks['insurance'])
-    # Investment with guardrails: avoid common FASTag/toll false positives that include 'SIP' substrings
-    investment_candidate = any(k in merchant_lower or k in description_lower for k in ks['investment'])
-    has_investment_exclusions = any(k in merchant_lower or k in description_lower for k in ks['exclude_investment_desc'])
-    is_investment = investment_candidate and not has_investment_exclusions
-    is_govt = any(k in merchant_lower or k in description_lower for k in ks['govt'])
-    return is_loan, is_insurance, is_investment, is_govt
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    return service._classify_financial_flags(merchant_lower, description_lower)
 
 
 def _should_include_txn(txn: Transaction, min_amount: float = 500) -> bool:
-    """Unified filter used across detection flows for selecting candidate debit transactions."""
-    # Normalize transaction type: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
-    txn_type = txn.type.lower() if txn.type else ''
-    is_debit = txn_type in ['debit', 'withdrawal']
-    
-    if not is_debit or txn.amount < min_amount:
-        return False
-    merchant_lower = (txn.merchant_canonical or '').lower()
-    description_lower = (txn.description_raw or '').lower()
-    ks = _keyword_sets()
-    # Hard exclude FASTag/toll-like items from recurring obligation detection
-    if any(ex in merchant_lower or ex in description_lower for ex in ks['exclude_investment_desc']):
-        return False
-    if any(ex in description_lower for ex in ks['exclude_desc']):
-        return False
-    if any(ex in merchant_lower for ex in ks['exclude_merchant']):
-        return False
-    is_loan, is_insurance, is_investment, is_govt = _classify_financial_flags(merchant_lower, description_lower)
-    return is_loan or is_insurance or is_investment or is_govt
+    """Unified filter for selecting candidate debit transactions."""
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    return service._should_include_txn(txn, min_amount)
 
 
 def _filter_financial_transactions(transactions: List[Transaction], min_amount: float = 500) -> List[Transaction]:
     """Apply shared filtering to get candidate financial obligation transactions."""
-    results: List[Transaction] = []
-    for txn in transactions:
-        if _should_include_txn(txn, min_amount=min_amount):
-            results.append(txn)
-    return results
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    return service._filter_financial_transactions(transactions, min_amount)
 
 
 def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
-    """Detect recurring salary credits by amount similarity and salary keywords"""
+    """Detect recurring salary credits by amount similarity and salary keywords. Delegates to SalarySweepService."""
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    return service.detect_salary_pattern(transactions)
+
+def _detect_salary_pattern_old(transactions: List[Transaction]) -> Optional[dict]:
+    """OLD IMPLEMENTATION - Kept for reference. Use detect_salary_pattern() instead."""
     # Filter for credit transactions
     logger.info(f"🧐 SALARY DETECTION INPUT: Received {len(transactions)} total transactions")
     if transactions:
@@ -714,86 +595,18 @@ def calculate_optimization(
     salary_rate: float = SALARY_ACCOUNT_RATE,
     savings_rate: float = SAVINGS_ACCOUNT_RATE
 ) -> CalculateResponse:
-    """Calculate all three optimization scenarios"""
-
-    total_emi = sum(emi.emi_amount for emi in confirmed_emis)
-
-    # Scenario 1: Current (no sweep)
-    current_scenario = OptimizerScenario(
-        name='Current Setup (No Sweep)',
-        description='Keep all salary in low-interest salary account',
-        emi_dates=None,
-        salary_account_balance=salary_amount,
-        savings_account_balance=0.0,
-        avg_days_in_savings=0.0,
-        monthly_interest_salary=(salary_amount * salary_rate / 100 / 12),
-        monthly_interest_savings=0.0,
-        total_monthly_interest=(salary_amount * salary_rate / 100 / 12),
-        total_annual_interest=(salary_amount * salary_rate / 100)
-    )
-
-    # Scenario 2: Uniform sweep (all EMIs on day 1)
-    surplus_after_emis = salary_amount - total_emi
-    avg_days_uniform = 15  # Average days in savings for uniform scenario
-
-    monthly_interest_salary_uniform = total_emi * salary_rate / 100 / 12
-    monthly_interest_savings_uniform = surplus_after_emis * savings_rate / 100 / 12 * (avg_days_uniform / 30)
-
-    uniform_scenario = OptimizerScenario(
-        name='Uniform Sweep (All EMIs Day 1)',
-        description='Pay all EMIs on day 1, sweep surplus to savings',
-        emi_dates='All on 1st',
-        salary_account_balance=total_emi,
-        savings_account_balance=surplus_after_emis,
-        avg_days_in_savings=avg_days_uniform,
-        monthly_interest_salary=monthly_interest_salary_uniform,
-        monthly_interest_savings=monthly_interest_savings_uniform,
-        total_monthly_interest=monthly_interest_salary_uniform + monthly_interest_savings_uniform,
-        total_annual_interest=(monthly_interest_salary_uniform + monthly_interest_savings_uniform) * 12
-    )
-
-    # Scenario 3: Optimized (stagger EMIs throughout month)
-    # Simulate staggering EMIs to maximize days in savings
-    num_emis = len(confirmed_emis)
-    if num_emis > 0:
-        # Distribute EMIs evenly throughout the month
-        avg_days_optimized = 20  # Better than uniform
-    else:
-        avg_days_optimized = 28  # Almost full month if no EMIs
-
-    monthly_interest_salary_opt = total_emi * salary_rate / 100 / 12
-    monthly_interest_savings_opt = surplus_after_emis * savings_rate / 100 / 12 * (avg_days_optimized / 30)
-
-    optimized_scenario = OptimizerScenario(
-        name='Optimized Sweep (Staggered EMIs)',
-        description='Stagger EMI dates to maximize time in high-interest savings',
-        emi_dates='Spread: 5th, 10th, 15th, 20th...',
-        salary_account_balance=total_emi,
-        savings_account_balance=surplus_after_emis,
-        avg_days_in_savings=avg_days_optimized,
-        monthly_interest_salary=monthly_interest_salary_opt,
-        monthly_interest_savings=monthly_interest_savings_opt,
-        total_monthly_interest=monthly_interest_salary_opt + monthly_interest_savings_opt,
-        total_annual_interest=(monthly_interest_salary_opt + monthly_interest_savings_opt) * 12
-    )
-
-    # Calculate gains
-    interest_gain = optimized_scenario.total_annual_interest - current_scenario.total_annual_interest
-
-    # Recommendation
-    if interest_gain > 5000:
-        recommendation = f"Highly Recommended: Save ₹{interest_gain:,.0f}/year with optimized sweep!"
-    elif interest_gain > 2000:
-        recommendation = f"Recommended: Save ₹{interest_gain:,.0f}/year with salary sweep"
-    else:
-        recommendation = f"Marginal benefit: ₹{interest_gain:,.0f}/year gain"
-
+    """Calculate all three optimization scenarios. Delegates to SalarySweepService."""
+    db_manager = DatabaseManager()
+    service = SalarySweepService(db_manager)
+    result = service.calculate_optimization(salary_amount, confirmed_emis, salary_rate, savings_rate)
+    
+    # Convert dict response to Pydantic models
     return CalculateResponse(
-        current_scenario=current_scenario,
-        uniform_sweep=uniform_scenario,
-        optimized_sweep=optimized_scenario,
-        recommendation=recommendation,
-        interest_gain_vs_current=interest_gain
+        current_scenario=OptimizerScenario(**result['current_scenario']),
+        uniform_sweep=OptimizerScenario(**result['uniform_sweep']),
+        optimized_sweep=OptimizerScenario(**result['optimized_sweep']),
+        recommendation=result['recommendation'],
+        interest_gain_vs_current=result['interest_gain_vs_current']
     )
 
 

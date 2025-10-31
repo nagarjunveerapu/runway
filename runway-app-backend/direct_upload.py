@@ -39,8 +39,10 @@ def main():
         merchant_canonical, score = merchant_norm.normalize(merchant_raw)
         txn['merchant_canonical'] = merchant_canonical
 
-        category = rule_based_category(description, merchant_canonical)
+        # Categorize (returns primary category and optional sub-type)
+        category, transaction_sub_type = rule_based_category(description, merchant_canonical)
         txn['category'] = category
+        txn['transaction_sub_type'] = transaction_sub_type
 
     print(f"   ✅ Enriched all transactions")
 

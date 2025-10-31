@@ -31,15 +31,15 @@ def fix_investment_categories():
     
     updated_count = 0
     for txn_id, description, merchant, old_category, user_id in transactions:
-        new_category = rule_based_category(description, merchant)
+        new_category, transaction_sub_type = rule_based_category(description, merchant)
         
         if new_category != old_category:
             cursor.execute(
-                "UPDATE transactions SET category = ? WHERE transaction_id = ?",
-                (new_category, txn_id)
+                "UPDATE transactions SET category = ?, transaction_sub_type = ? WHERE transaction_id = ?",
+                (new_category, transaction_sub_type, txn_id)
             )
             updated_count += 1
-            print(f"Updated {txn_id}: '{old_category}' -> '{new_category}'")
+            print(f"Updated {txn_id}: '{old_category}' -> '{new_category}' (sub-type: {transaction_sub_type})")
             print(f"  Description: {description}")
             print(f"  Merchant: {merchant}")
     

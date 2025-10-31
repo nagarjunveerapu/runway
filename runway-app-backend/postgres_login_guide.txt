@@ -1,0 +1,45 @@
+# PostgreSQL Manual Login Guide
+
+## Method 1: Using psql (Interactive)
+export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
+
+# Connect to the main postgres database
+psql -d postgres
+
+# Or connect directly to runway_finance database
+psql -d runway_finance
+
+# Or connect as runway_user
+psql -U runway_user -d runway_finance
+
+## Method 2: One-line commands
+export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
+
+# List all databases
+psql -d postgres -c "SELECT datname FROM pg_database WHERE datistemplate = false;"
+
+# List all tables in runway_finance
+psql -d runway_finance -c "\dt"
+
+# Query users
+psql -d postgres -c "SELECT usename, usesuper FROM pg_user;"
+
+# Query tables in runway_finance
+psql -d runway_finance -c "SELECT table_name FROM information_schema.tables WHERE table_schema = 'public';"
+
+## Method 3: GUI Tools
+# Install pgAdmin (PostgreSQL Admin Tool)
+brew install --cask pgadmin4
+
+# Or use DBeaver (Universal DB Tool)
+brew install --cask dbeaver-community
+
+## Connection Details
+Host: localhost
+Port: 5432
+Database: runway_finance
+Username: runway_user
+Password: runway_password
+
+Connection String: postgresql://runway_user:runway_password@localhost:5432/runway_finance
+

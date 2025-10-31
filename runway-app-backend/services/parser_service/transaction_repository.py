@@ -110,12 +110,15 @@ class TransactionRepository:
                 merchant_raw=transaction_dict.get('merchant_raw', '')[:255] or None,
                 merchant_canonical=transaction_dict.get('merchant_canonical', '')[:255] or None,
                 category=transaction_dict.get('category', 'Unknown')[:100],
+                transaction_sub_type=transaction_dict.get('transaction_sub_type')[:100] if transaction_dict.get('transaction_sub_type') else None,
                 # Handle balance: use 0.0 if present (including zero), None only if missing
                 # FIX: Check 'is not None' instead of truthiness, as 0.0 is falsy but valid
                 balance=float(transaction_dict.get('balance')) if transaction_dict.get('balance') is not None else None,
                 source=transaction_dict.get('source', 'upload'),
                 is_duplicate=transaction_dict.get('is_duplicate', False),
-                duplicate_count=transaction_dict.get('duplicate_count', 0)
+                duplicate_count=transaction_dict.get('duplicate_count', 0),
+                bank_name=transaction_dict.get('bank_name'),
+                extra_metadata=transaction_dict.get('extra_metadata')
             )
             
             session.add(db_transaction)

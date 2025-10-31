@@ -9,6 +9,7 @@ from typing import List, Dict
 from deduplication.detector import DeduplicationDetector
 from src.merchant_normalizer import MerchantNormalizer
 from src.classifier import rule_based_category
+from src.emi_conversion_detector import detect_emi_conversions
 from config import Config
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,8 @@ class TransactionEnrichmentService:
         # Normalize merchant
         merchant_canonical, score = self.merchant_normalizer.normalize(merchant_raw)
         
-        # Categorize
-        category = rule_based_category(
+        # Categorize (returns primary category and optional sub-type)
+        category, transaction_sub_type = rule_based_category(
             description,
             merchant_canonical
         )
@@ -94,6 +95,7 @@ class TransactionEnrichmentService:
         enriched_txn['merchant_raw'] = merchant_raw
         enriched_txn['merchant_canonical'] = merchant_canonical
         enriched_txn['category'] = category
+        enriched_txn['transaction_sub_type'] = transaction_sub_type
         
         return enriched_txn
     
@@ -138,10 +140,19 @@ class TransactionEnrichmentService:
         enriched = self.enrich_transactions(transactions)
         logger.info(f"✨ ENRICHMENT SERVICE: ✅ Enriched {len(enriched)} transactions")
         
-        # Step 2: Deduplicate
-        logger.info("✨ ENRICHMENT SERVICE: Step 2 - Detecting and handling duplicates...")
-        cleaned, stats = self.detect_and_handle_duplicates(enriched)
+        # Step 2: Detect EMI Conversions (for credit card transactions)
+        logger.info("✨ ENRICHMENT SERVICE: Step 2 - Detecting EMI conversion patterns...")
+        enriched_with_emi = detect_emi_conversions(enriched)
+        emi_converted_count = sum(1 for t in enriched_with_emi if t.get('extra_metadata', {}).get('emi_converted'))
+        logger.info(f"✨ ENRICHMENT SERVICE: ✅ EMI conversion detection complete. Found {emi_converted_count} EMI conversions")
+        
+        # Step 3: Deduplicate
+        logger.info("✨ ENRICHMENT SERVICE: Step 3 - Detecting and handling duplicates...")
+        cleaned, stats = self.detect_and_handle_duplicates(enriched_with_emi)
         logger.info(f"✨ ENRICHMENT SERVICE: ✅ Deduplication complete. Duplicates found: {stats.get('merged_count', 0)}")
+        
+        # Add EMI conversion count to stats
+        stats['emi_converted_count'] = emi_converted_count
         
         return cleaned, stats
 

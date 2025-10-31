@@ -18,6 +18,7 @@ This project is a local, offline proof-of-concept to parse bank statements from 
 
 - Python 3.9+
 - See `requirements.txt` for dependencies
+- **Database**: SQLite (development) or PostgreSQL (production)
 
 ## Quick Install
 
@@ -209,6 +210,34 @@ All tests should pass:
 5. **Classification**: Assigns categories based on keywords and merchant names
 6. **Recurring Detection**: Identifies repeated transactions
 7. **Output Generation**: Creates CSV and JSON summary files
+
+## Database Setup
+
+### SQLite (Development)
+
+SQLite is used by default for development. No setup required - it's file-based.
+
+### PostgreSQL (Production)
+
+For production deployments, we recommend PostgreSQL for better concurrency and performance.
+
+**Quick Setup:**
+1. Install PostgreSQL (see [POSTGRESQL_SETUP.md](POSTGRESQL_SETUP.md) for detailed instructions)
+2. Create database and user:
+   ```bash
+   sudo -u postgres psql < setup_postgres.sql
+   ```
+3. Configure environment:
+   ```bash
+   cp env.example .env
+   # Edit .env and set DATABASE_URL
+   ```
+4. Install dependencies:
+   ```bash
+   pip install -r requirements.txt  # Includes psycopg2-binary
+   ```
+
+For detailed PostgreSQL setup, migration guides, and cloud options, see [POSTGRESQL_SETUP.md](POSTGRESQL_SETUP.md).
 
 ## License & Notes
 

@@ -56,6 +56,7 @@ class Account(Base):
     # Relationships
     user = relationship('User', back_populates='accounts')
     transactions = relationship('Transaction', back_populates='account', cascade='all, delete-orphan')
+    credit_card_statements = relationship('CreditCardStatement', back_populates='account', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<Account(account_id='{self.account_id}', bank='{self.bank_name}', type='{self.account_type}')>"
@@ -110,7 +111,8 @@ class Transaction(Base):
     merchant_canonical = Column(String(255), index=True)
 
     # Categorization
-    category = Column(String(100), index=True)
+    category = Column(String(100), index=True)  # Primary category (e.g., "Education")
+    transaction_sub_type = Column(String(100))  # Sub-type classification (e.g., "EMI/Loan", "Credit Card Payment")
     labels = Column(JSON)  # Multi-label support
     confidence = Column(Float)  # ML prediction confidence
 
@@ -481,6 +483,76 @@ class Liability(Base):
         }
 
 
+class CreditCardStatement(Base):
+    """Credit Card Statement metadata tracking"""
+    __tablename__ = 'credit_card_statements'
+
+    statement_id = Column(String(36), primary_key=True)
+    user_id = Column(String(36), ForeignKey('users.user_id'), nullable=False)
+    account_id = Column(String(36), ForeignKey('accounts.account_id'), nullable=True, index=True)
+
+    # Statement metadata
+    bank_name = Column(String(100), nullable=False)
+    card_number_masked = Column(String(50))  # Last 4 or masked number
+    card_last_4_digits = Column(String(4), index=True)
+    customer_name = Column(String(255))
+    
+    # Statement period
+    statement_start_date = Column(String(10))  # YYYY-MM-DD
+    statement_end_date = Column(String(10))  # YYYY-MM-DD
+    billing_period = Column(String(50))  # e.g., "Jan 2024"
+    
+    # Transaction counts
+    total_transactions = Column(Integer, default=0)
+    transactions_processed = Column(Integer, default=0)
+    
+    # Source file tracking
+    source_file = Column(String(255))
+    source_type = Column(String(20))  # 'csv', 'pdf', 'manual'
+    
+    # Status
+    is_processed = Column(Boolean, default=False)
+    processing_status = Column(String(50))  # 'pending', 'processing', 'completed', 'failed'
+    error_message = Column(Text)
+    
+    # Metadata
+    extra_metadata = Column(JSON)  # Additional card-specific metadata
+    
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # Relationship
+    user = relationship('User', back_populates='credit_card_statements')
+    account = relationship('Account', back_populates='credit_card_statements')
+
+    def __repr__(self):
+        return f"<CreditCardStatement(statement_id='{self.statement_id}', bank='{self.bank_name}', period='{self.billing_period}')>"
+
+    def to_dict(self):
+        return {
+            'statement_id': self.statement_id,
+            'user_id': self.user_id,
+            'account_id': self.account_id,
+            'bank_name': self.bank_name,
+            'card_number_masked': self.card_number_masked,
+            'card_last_4_digits': self.card_last_4_digits,
+            'customer_name': self.customer_name,
+            'statement_start_date': self.statement_start_date,
+            'statement_end_date': self.statement_end_date,
+            'billing_period': self.billing_period,
+            'total_transactions': self.total_transactions,
+            'transactions_processed': self.transactions_processed,
+            'source_file': self.source_file,
+            'source_type': self.source_type,
+            'is_processed': self.is_processed,
+            'processing_status': self.processing_status,
+            'error_message': self.error_message,
+            'extra_metadata': self.extra_metadata,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class NetWorthSnapshot(Base):
     """Net Worth Snapshot model for timeline tracking"""
     __tablename__ = 'net_worth_snapshots'
@@ -532,6 +604,7 @@ User.liquidations = relationship('Liquidation', back_populates='user', cascade='
 User.liabilities = relationship('Liability', back_populates='user', cascade='all, delete-orphan')
 User.salary_sweep_config = relationship('SalarySweepConfig', back_populates='user', uselist=False, cascade='all, delete-orphan')
 User.detected_emi_patterns = relationship('DetectedEMIPattern', back_populates='user', cascade='all, delete-orphan')
+User.credit_card_statements = relationship('CreditCardStatement', back_populates='user', cascade='all, delete-orphan')
 User.net_worth_snapshots = relationship('NetWorthSnapshot', back_populates='user', cascade='all, delete-orphan')
 
 # Indexes for performance

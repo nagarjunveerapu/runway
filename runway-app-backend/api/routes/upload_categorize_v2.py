@@ -86,7 +86,7 @@ async def upload_csv_smart(
     logger.info("📡 API ROUTE: Delegating to ParserService...")
     logger.info("=" * 80)
     
-    if not file.filename.endswith('.csv'):
+    if not file.filename.lower().endswith('.csv'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only CSV files are supported"
@@ -205,7 +205,7 @@ async def upload_pdf_smart(
     logger.info("📡 API ROUTE: Delegating to ParserService...")
     logger.info("=" * 80)
     
-    if not file.filename.endswith('.pdf'):
+    if not file.filename.lower().endswith('.pdf'):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Only PDF files are supported"

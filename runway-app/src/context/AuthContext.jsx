@@ -23,7 +23,32 @@ export const AuthProvider = ({ children }) => {
       // Verify token by fetching current user
       fetchCurrentUser();
     } else {
-      setLoading(false);
+      // DEV MODE: Auto-login for development (comment out for production)
+      const devAutoLogin = async () => {
+        try {
+          const devUsername = 'test@example.com';
+          const devPassword = 'testpassword123';
+          
+          const response = await api.post('/auth/login', { username: devUsername, password: devPassword });
+          const { access_token } = response.data;
+          
+          setToken(access_token);
+          localStorage.setItem('token', access_token);
+          api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+          
+          await fetchCurrentUser();
+          console.log('DEV: Auto-logged in as', devUsername);
+        } catch (error) {
+          console.error('DEV auto-login failed:', error);
+          setLoading(false);
+        }
+      };
+      
+      // Uncomment the line below to enable auto-login
+      devAutoLogin();
+      
+      // Comment out the line below if using auto-login
+      // setLoading(false);
     }
   }, [token]);
 
