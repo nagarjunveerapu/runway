@@ -1,6 +1,7 @@
 // src/components/Modern/InvestmentOptimizer.jsx
 import React, { useState, useEffect } from 'react';
 import { analyzeInvestments } from '../../api/services/investmentOptimizer';
+import { detectOrRefreshPatterns } from '../../api/services/salarySweepV2';
 
 export default function InvestmentOptimizer() {
   const [data, setData] = useState(null);
@@ -70,6 +71,26 @@ export default function InvestmentOptimizer() {
             <h2 className="text-2xl font-bold">Investment Summary</h2>
             <p className="text-purple-100">Your portfolio overview</p>
           </div>
+        </div>
+
+        <div className="flex gap-3">
+          <button
+            onClick={async () => {
+              try {
+                const res = await detectOrRefreshPatterns();
+                const newInvestments = (res?.emis || []).filter(e => e.category === 'Investment');
+                // Simple feedback; could be replaced with toast
+                alert(`Identified ${newInvestments.length} potential investment pattern(s). Review in Salary Sweep.`);
+                await loadData();
+              } catch (e) {
+                console.error('Detect investments failed', e);
+                alert('Failed to identify investments. Please try again.');
+              }
+            }}
+            className="bg-white/20 hover:bg-white/30 transition text-white px-4 py-2 rounded-lg text-sm font-medium border border-white/20"
+          >
+            Identify new investments
+          </button>
         </div>
 
         <div className="grid grid-cols-2 gap-4 mt-6">

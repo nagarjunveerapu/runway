@@ -83,7 +83,7 @@ const CSVUpload = ({ onUploadComplete }) => {
       setProgress({ stage: 'analyzing', message: 'Analyzing transactions...' });
 
       // Use different endpoint based on file type
-      const endpoint = isPDF ? '/upload/pdf' : '/upload/csv-smart';
+      const endpoint = isPDF ? '/upload/pdf-smart' : '/upload/csv-smart';  // Use parser service for both
       
       const response = await api.post(endpoint, formData, {
         headers: {
@@ -261,13 +261,40 @@ const CSVUpload = ({ onUploadComplete }) => {
               <div className="mb-4 bg-green-50 border-l-4 border-green-400 rounded-lg p-4">
                 <div className="flex">
                   <span className="text-2xl mr-3">✓</span>
-                  <div>
-                    <p className="font-semibold text-green-800 mb-1">Upload Successful!</p>
-                    <p className="text-sm text-green-700">
-                      {result.transactions_created} transactions created
-                      {result.assets_created > 0 && `, ${result.assets_created} assets`}
-                      {result.emis_identified > 0 && `, ${result.emis_identified} EMIs`}
-                    </p>
+                  <div className="flex-1">
+                    <p className="font-semibold text-green-800 mb-2">Upload Successful!</p>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex items-center justify-between">
+                        <span className="text-green-700">📊 Transactions imported:</span>
+                        <span className="font-bold text-green-800">
+                          {result.transactions_imported || result.transactions_created || 0}
+                        </span>
+                      </div>
+                      {result.duplicates_found > 0 && (
+                        <div className="flex items-center justify-between bg-yellow-100 rounded p-2">
+                          <span className="text-orange-700">🔄 Duplicates skipped:</span>
+                          <span className="font-bold text-orange-800">
+                            {result.duplicates_found}
+                          </span>
+                        </div>
+                      )}
+                      {result.emis_identified > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-green-700">💳 EMIs identified:</span>
+                          <span className="font-bold text-green-800">
+                            {result.emis_identified}
+                          </span>
+                        </div>
+                      )}
+                      {result.assets_created > 0 && (
+                        <div className="flex items-center justify-between">
+                          <span className="text-green-700">🏠 Assets created:</span>
+                          <span className="font-bold text-green-800">
+                            {result.assets_created}
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

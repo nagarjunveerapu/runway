@@ -124,7 +124,8 @@ async def upload_csv(file: UploadFile = File(...)):
                     merchant_raw=txn.get('merchant_raw'),
                     merchant_canonical=txn.get('merchant_canonical'),
                     category=txn.get('category', 'Unknown'),
-                    balance=float(txn.get('balance', 0)) if txn.get('balance') else None,
+                    # Fix: Check 'is not None' instead of truthiness, as 0.0 is falsy but valid
+                    balance=float(txn.get('balance')) if txn.get('balance') is not None else None,
                     source='csv_upload',
                     is_duplicate=txn.get('is_duplicate', False),
                     duplicate_count=txn.get('duplicate_count', 0)
@@ -279,18 +280,11 @@ async def upload_pdf(
             )
             txn['category'] = category
 
-        # Detect duplicates
-        dedup = DeduplicationDetector(
-            time_window_days=Config.DEDUP_TIME_WINDOW_DAYS,
-            fuzzy_threshold=Config.DEDUP_FUZZY_THRESHOLD,
-            merge_duplicates=Config.DEDUP_MERGE_DUPLICATES
-        )
-
-        clean_transactions = dedup.detect_duplicates(transactions)
-        duplicate_stats = dedup.get_duplicate_stats(clean_transactions)
-
-        logger.info(f"Deduplication: {len(transactions)} → {len(clean_transactions)} "
-                   f"({duplicate_stats['merged_count']} duplicates merged)")
+        # Skip in-memory deduplication - database unique constraint handles duplicates
+        # The DeduplicationDetector is for pattern detection (EMIs/SIPs), not for preventing database duplicates
+        # Database-level unique constraint on (user_id, account_id, date, amount, description_raw, balance) handles duplicates
+        logger.info(f"Skipping in-memory deduplication - using database unique constraint for duplicate detection")
+        clean_transactions = transactions
 
         # Insert transactions into database
         db = get_db()
@@ -322,7 +316,8 @@ async def upload_pdf(
                         merchant_raw=txn.get('merchant_raw', '')[:255] or None,
                         merchant_canonical=txn.get('merchant_canonical', '')[:255] or None,
                         category=txn.get('category', 'Unknown')[:100],
-                        balance=float(txn.get('balance', 0)) if txn.get('balance') else None,
+                        # Fix: Check 'is not None' instead of truthiness, as 0.0 is falsy but valid
+                    balance=float(txn.get('balance')) if txn.get('balance') is not None else None,
                         source='pdf_upload',
                         is_duplicate=txn.get('is_duplicate', False),
                         duplicate_count=txn.get('duplicate_count', 0)
@@ -347,11 +342,14 @@ async def upload_pdf(
 
         logger.info(f"Inserted {inserted}/{len(clean_transactions)} transactions")
 
+        # Calculate duplicates skipped by database constraint
+        duplicates_skipped = len(transactions) - inserted
+
         return FileUploadResponse(
             filename=file.filename,
             transactions_found=len(transactions),
             transactions_imported=inserted,
-            duplicates_found=duplicate_stats['merged_count'],
+            duplicates_found=duplicates_skipped,  # Duplicates skipped by database unique constraint
             status="success",
             message=f"Successfully imported {inserted} transactions from PDF"
         )

@@ -26,7 +26,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-
 # Pydantic models
 class DetectedAsset(BaseModel):
     """Auto-detected asset from EMI patterns"""
@@ -163,8 +162,26 @@ async def get_assets(
         assets = session.query(Asset).filter(
             Asset.user_id == current_user.user_id
         ).all()
+
+        # Deduplicate by recurring_pattern_id (if present): keep most recently updated
+        by_pattern = {}
+        unique_assets = []
+        for a in assets:
+            pid = getattr(a, 'recurring_pattern_id', None)
+            if not pid:
+                unique_assets.append(a)
+                continue
+            existing = by_pattern.get(pid)
+            if not existing:
+                by_pattern[pid] = a
+            else:
+                prev_updated = existing.updated_at or existing.created_at
+                curr_updated = a.updated_at or a.created_at
+                if curr_updated and prev_updated and curr_updated > prev_updated:
+                    by_pattern[pid] = a
+        unique_assets.extend([v for v in by_pattern.values()])
         
-        return [asset.to_dict() for asset in assets]
+        return [asset.to_dict() for asset in unique_assets]
     finally:
         session.close()
 
@@ -215,7 +232,28 @@ async def create_asset(
             else:
                 purchase_date = None
         
-        # Create asset
+        # Upsert by recurring_pattern_id to avoid duplicates for same EMI mapping
+        existing = None
+        rp_id = asset_data.get('recurring_pattern_id')
+        if rp_id:
+            existing = session.query(Asset).filter(
+                Asset.user_id == current_user.user_id,
+                Asset.recurring_pattern_id == rp_id
+            ).first()
+
+        # Create or update
+        if existing:
+            existing.name = asset_data.get('name', existing.name)
+            existing.asset_type = asset_data.get('asset_type', existing.asset_type)
+            existing.quantity = asset_data.get('quantity', existing.quantity)
+            existing.purchase_price = asset_data.get('purchase_price', existing.purchase_price)
+            existing.current_value = asset_data.get('current_value', existing.current_value)
+            existing.purchase_date = purchase_date or existing.purchase_date
+            existing.notes = asset_data.get('notes', existing.notes)
+            session.commit()
+            session.refresh(existing)
+            return existing.to_dict()
+
         asset = Asset(
             asset_id=str(uuid.uuid4()),
             user_id=current_user.user_id,
@@ -225,6 +263,7 @@ async def create_asset(
             purchase_price=asset_data.get('purchase_price'),
             current_value=asset_data.get('current_value'),
             purchase_date=purchase_date,
+            recurring_pattern_id=asset_data.get('recurring_pattern_id'),
             liquid=asset_data.get('liquid', False),
             disposed=asset_data.get('disposed', False),
             notes=asset_data.get('notes')
@@ -285,6 +324,8 @@ async def update_asset(
             asset.liquid = asset_data['liquid']
         if 'disposed' in asset_data:
             asset.disposed = asset_data['disposed']
+        if 'recurring_pattern_id' in asset_data:
+            asset.recurring_pattern_id = asset_data['recurring_pattern_id']
         if 'notes' in asset_data:
             asset.notes = asset_data['notes']
         

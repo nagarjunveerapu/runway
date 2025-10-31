@@ -21,7 +21,17 @@ import re
 import logging
 from typing import List, Dict, Optional, Tuple
 from pathlib import Path
-from datetime import datetime
+
+# Import common transaction formatting and parsing utilities
+from ingestion.transaction_formatter import (
+    create_transaction_dict,
+    detect_columns,
+    extract_amount_and_type,
+    extract_balance,
+    parse_amount_string,
+    DATE_KEYWORDS,
+    DESC_KEYWORDS
+)
 
 # Optional imports with graceful degradation
 try:
@@ -77,6 +87,7 @@ class PDFParser:
         self.bank_name = bank_name
         self.strategies_attempted = []
         self.success_strategy = None
+        self.metadata = {}  # Store extracted metadata
 
     def parse(self, pdf_path: str) -> List[Dict]:
         """
@@ -95,9 +106,20 @@ class PDFParser:
         if not pdf_path.exists():
             raise FileNotFoundError(f"PDF not found: {pdf_path}")
 
+        # Store pdf_path as instance variable for use in helper methods
+        self.pdf_path = pdf_path
+
         logger.info(f"Parsing PDF: {pdf_path}")
 
-        # Try strategies in order
+        # Step 1: Extract metadata from first page before parsing transactions
+        logger.info("🔍 Extracting metadata from PDF...")
+        self.metadata = self._extract_metadata(pdf_path)
+        if self.metadata:
+            logger.info(f"✅ Extracted metadata: Account={self.metadata.get('account_number')}, Bank={self.metadata.get('bank_name')}, Holder={self.metadata.get('account_holder_name')}")
+        else:
+            logger.info("⚠️  No metadata extracted from PDF")
+
+        # Step 2: Parse transactions using strategies
         strategies = [
             ("pdfplumber_text", self._extract_with_pdfplumber_text),
             ("pdfplumber_tables", self._extract_with_pdfplumber_tables),
@@ -149,15 +171,21 @@ class PDFParser:
         transactions = []
 
         with pdfplumber.open(pdf_path) as pdf:
+            total_pages = len(pdf.pages)
+            logger.info(f"Processing {total_pages} pages with pdfplumber text extraction")
+            
             for page_num, page in enumerate(pdf.pages, 1):
                 text = page.extract_text()
                 if not text:
+                    logger.debug(f"Page {page_num}: No text extracted")
                     continue
 
                 # Parse transactions from text
                 page_txns = self._parse_text_transactions(text)
+                logger.info(f"Page {page_num}: Extracted {len(page_txns)} transactions")
                 transactions.extend(page_txns)
 
+        logger.info(f"Total transactions extracted from text: {len(transactions)}")
         return transactions
 
     def _extract_with_pdfplumber_tables(self, pdf_path: str) -> List[Dict]:
@@ -171,15 +199,26 @@ class PDFParser:
         transactions = []
 
         with pdfplumber.open(pdf_path) as pdf:
+            total_pages = len(pdf.pages)
+            logger.info(f"Processing {total_pages} pages with pdfplumber table extraction")
+            
             for page_num, page in enumerate(pdf.pages, 1):
                 tables = page.extract_tables()
                 if not tables:
+                    logger.debug(f"Page {page_num}: No tables found")
                     continue
 
-                for table in tables:
+                logger.info(f"Page {page_num}: Found {len(tables)} table(s)")
+                for table_idx, table in enumerate(tables):
+                    if not table or len(table) == 0:
+                        logger.debug(f"Page {page_num}, Table {table_idx + 1}: Empty table, skipping")
+                        continue
+                    
                     table_txns = self._parse_table_transactions(table)
+                    logger.info(f"Page {page_num}, Table {table_idx + 1}: Extracted {len(table_txns)} transactions")
                     transactions.extend(table_txns)
 
+        logger.info(f"Total transactions extracted from tables: {len(transactions)}")
         return transactions
 
     def _extract_with_tabula(self, pdf_path: str) -> List[Dict]:
@@ -258,7 +297,8 @@ class PDFParser:
         lines = text.split('\n')
 
         # Generic pattern: DD/MM/YYYY or DD-MM-YYYY followed by description and amount
-        date_pattern = r'(\d{2}[/-]\d{2}[/-]\d{4})'
+        # Support more date formats: DD/MM/YY, DD-MM-YY, DD.MM.YYYY, etc.
+        date_pattern = r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})'
         amount_pattern = r'[\d,]+\.\d{2}'
 
         for line in lines:
@@ -266,11 +306,14 @@ class PDFParser:
             if not line:
                 continue
 
-            # Look for date at the START of the line (skip continuation lines)
+            # Look for date - try at start first, then anywhere in line
             # Bank statements typically start transaction rows with a date
             date_match = re.match(date_pattern, line)
             if not date_match:
-                continue
+                # Try searching anywhere in the line (for multi-column layouts)
+                date_match = re.search(date_pattern, line)
+                if not date_match:
+                    continue
 
             date_str = date_match.group(1)
 
@@ -279,10 +322,9 @@ class PDFParser:
             if not amount_matches:
                 continue
             
-            # A complete transaction should have at least 2 amounts (amount + balance)
-            # Skip if we only have 1 amount - likely a continuation line
-            if len(amount_matches) < 2:
-                continue
+            # Accept transactions with 1+ amounts
+            # Prefer 2+ amounts (amount + balance), but don't skip single amount transactions
+            # Some PDF statements may not include balance in every row
 
             # Extract description (text between date and amount)
             desc_start = date_match.end()
@@ -338,20 +380,48 @@ class PDFParser:
                 amount = float(amount_matches[0].replace(',', ''))
                 balance = None
                 txn_type = 'debit'  # Default
+                
+                # Try to determine type from context
+                if any(indicator in line.upper() for indicator in ['CR', 'CREDIT', 'DEPOSIT', 'RECEIVED']):
+                    txn_type = 'credit'
+                elif any(indicator in line.upper() for indicator in ['DR', 'DEBIT', 'WITHDRAW', 'PAID']):
+                    txn_type = 'debit'
+            
+            # Validate extracted data before creating transaction
+            if not description or description.strip() == '':
+                # Try to extract description from the entire line if empty
+                logger.debug(f"Empty description for line: {line}")
+                # Use full line minus date and amounts as description
+                desc_parts = line.split(date_str, 1)
+                if len(desc_parts) > 1:
+                    description = desc_parts[1]
+                    # Remove amounts from description
+                    for amt in amount_matches:
+                        description = description.replace(amt, '').strip()
+                if not description or description.strip() == '':
+                    description = 'Transaction from PDF'
 
-            transactions.append({
-                'date': self._normalize_date(date_str),
-                'description': description,
-                'amount': amount,
-                'type': txn_type,
-                'balance': balance if 'balance' in locals() else None,
-            })
+            # Create transaction using common formatter
+            tx = create_transaction_dict(
+                description=description,
+                amount=amount,
+                txn_type=txn_type,
+                date=date_str,
+                balance=balance if 'balance' in locals() else None,
+                source='PDF'
+            )
+            # Update notes with filename
+            tx['notes'] = f'Parsed from PDF: {self.pdf_path.name}'
+            
+            transactions.append(tx)
 
         return transactions
 
     def _parse_table_transactions(self, table: List[List[str]]) -> List[Dict]:
         """
         Parse transactions from table data
+        
+        Handles table extraction from PDF, converting to DataFrame for processing.
 
         Args:
             table: List of rows, each row is a list of cell values
@@ -359,116 +429,288 @@ class PDFParser:
         Returns:
             List of transaction dictionaries
         """
-        if not table or len(table) < 2:
+        if not table or len(table) < 1:
+            return []
+
+        # Handle header row detection
+        # First row is usually header, but might be empty or have metadata
+        # Try to find the header row (has column names)
+        header_row_idx = 0
+        
+        # Look for header row (contains keywords like 'date', 'transaction', 'amount', etc.)
+        header_keywords = ['date', 'transaction', 'amount', 'description', 'remarks', 'withdrawal', 'deposit', 'balance']
+        for idx, row in enumerate(table[:min(5, len(table))]):
+            row_text = ' '.join([str(cell).lower() if cell else '' for cell in row])
+            keyword_count = sum(1 for keyword in header_keywords if keyword in row_text)
+            if keyword_count >= 3:
+                header_row_idx = idx
+                logger.debug(f"Found header row at index {idx} with {keyword_count} matching keywords")
+                break
+        
+        if len(table) < header_row_idx + 2:
+            logger.debug("Table has no data rows after header")
             return []
 
         # Convert to DataFrame for easier processing
-        df = pd.DataFrame(table[1:], columns=table[0])
-        return self._parse_dataframe_transactions(df)
+        # Use header row as column names, skip rows before header
+        try:
+            # Clean header row
+            header_row = [str(cell).strip() if cell else f'Unnamed_{i}' for i, cell in enumerate(table[header_row_idx])]
+            
+            # Convert data rows to DataFrame
+            data_rows = table[header_row_idx + 1:]
+            df = pd.DataFrame(data_rows, columns=header_row[:len(data_rows[0]) if data_rows else 0])
+            
+            # Ensure DataFrame has same number of columns as header
+            if len(df.columns) != len(header_row):
+                # Pad or truncate columns
+                if len(df.columns) < len(header_row):
+                    for i in range(len(df.columns), len(header_row)):
+                        df[f'Unnamed_{i}'] = None
+                else:
+                    df = df.iloc[:, :len(header_row)]
+            
+            return self._parse_dataframe_transactions(df)
+        except Exception as e:
+            logger.warning(f"Failed to convert table to DataFrame: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            return []
 
     def _parse_dataframe_transactions(self, df: pd.DataFrame) -> List[Dict]:
         """
         Parse transactions from DataFrame
+        
+        This matches the CSV parser logic exactly to ensure consistent extraction.
 
-        This is a generic parser. Override for bank-specific logic.
+        Args:
+            df: DataFrame with transaction rows
+
+        Returns:
+            List of transaction dictionaries
         """
         transactions = []
 
-        # Normalize column names
-        df.columns = [str(col).strip().lower() for col in df.columns]
-
-        # Try to identify columns
-        date_col = self._find_column(df, ['date', 'txn date', 'transaction date', 'tran date'])
-        desc_col = self._find_column(df, ['description', 'particulars', 'narration', 'details'])
-        amount_col = self._find_column(df, ['amount', 'debit', 'credit', 'withdrawal', 'deposit'])
-        balance_col = self._find_column(df, ['balance', 'closing balance'])
-
-        if not date_col or not desc_col or not amount_col:
-            logger.warning("Could not identify required columns in table")
+        # Clean data exactly like CSV parser
+        # Remove completely empty columns
+        df = df.dropna(axis=1, how='all')
+        # Remove completely empty rows
+        df = df.dropna(how='all')
+        
+        if df.empty:
+            logger.warning("DataFrame is empty after cleaning")
             return []
 
-        for _, row in df.iterrows():
+        # Normalize column names for detection
+        df.columns = [str(col).strip() for col in df.columns]
+        
+        logger.info(f"Processing DataFrame with {len(df)} rows and columns: {list(df.columns)}")
+        
+        # Detect columns using common utility (same as CSV parser)
+        col_map = detect_columns(list(df.columns))
+
+        # Verify required columns detected (same validation as CSV parser)
+        if not col_map.get('date') or not col_map.get('description'):
+            logger.warning(f"Could not identify required columns in table. Found columns: {list(df.columns)}")
+            logger.warning(f"Column map: {col_map}")
+            return []
+
+        logger.info(f"Detected columns: {col_map}")
+
+        # Parse rows exactly like CSV parser
+        for idx, row in df.iterrows():
             try:
-                date = str(row[date_col]).strip()
-                description = str(row[desc_col]).strip()
-                amount_str = str(row[amount_col]).strip()
+                # Extract raw data exactly like CSV parser
+                date_str = str(row[col_map['date']]).strip() if pd.notna(row[col_map['date']]) else ''
+                description = str(row[col_map['description']]).strip() if pd.notna(row[col_map['description']]) else ''
 
-                # Skip empty rows
-                if not date or date == 'nan' or not amount_str or amount_str == 'nan':
+                # Skip invalid rows (same validation as CSV parser)
+                if not date_str or date_str == 'nan' or not description or description == 'nan':
+                    logger.debug(f"Row {idx}: Skipped - empty date or description (date='{date_str}', desc='{description[:30] if description else ''}')")
                     continue
 
-                # Parse amount
-                amount_str = re.sub(r'[^\d.]', '', amount_str)
-                if not amount_str:
+                # Extract amounts using common utility (same as CSV parser)
+                amount, txn_type, withdrawal, deposit = extract_amount_and_type(row, col_map)
+                if amount is None:
+                    logger.debug(f"Row {idx}: Skipped - no valid amount found (date='{date_str}', desc='{description[:30]}')")
                     continue
-                amount = float(amount_str)
 
-                # Parse balance if available
-                balance = None
-                if balance_col:
-                    balance_str = str(row[balance_col]).strip()
-                    balance_str = re.sub(r'[^\d.]', '', balance_str)
-                    if balance_str:
-                        balance = float(balance_str)
+                # Extract balance using common utility (same as CSV parser)
+                balance = extract_balance(row, col_map)
 
-                # Determine type
-                txn_type = 'debit'  # Default
-                # Check if there are separate debit/credit columns
-                if 'credit' in df.columns and pd.notna(row.get('credit')):
-                    txn_type = 'credit'
-
-                transactions.append({
-                    'date': self._normalize_date(date),
-                    'description': description,
-                    'amount': amount,
-                    'type': txn_type,
-                    'balance': balance,
-                })
+                # Create transaction using common formatter (same as CSV parser)
+                tx = create_transaction_dict(
+                    description=description,
+                    amount=amount,
+                    txn_type=txn_type,
+                    date=date_str,
+                    balance=balance,
+                    source='PDF'
+                )
+                # Update notes with filename
+                tx['notes'] = f'Parsed from PDF: {self.pdf_path.name}'
+                
+                transactions.append(tx)
+                
+                if len(transactions) % 50 == 0:
+                    logger.info(f"Progress: {len(transactions)} transactions parsed")
 
             except Exception as e:
-                logger.debug(f"Failed to parse row: {e}")
+                logger.debug(f"Failed to parse row {idx}: {e}")
+                import traceback
+                logger.debug(traceback.format_exc())
                 continue
 
+        logger.info(f"Successfully parsed {len(transactions)} transactions from DataFrame")
         return transactions
 
-    @staticmethod
-    def _find_column(df: pd.DataFrame, possible_names: List[str]) -> Optional[str]:
-        """Find column by possible names"""
-        for name in possible_names:
-            for col in df.columns:
-                if name in str(col).lower():
-                    return col
-        return None
 
-    @staticmethod
-    def _normalize_date(date_str: str) -> str:
+
+    def get_metadata(self) -> Dict:
+        """Get metadata extracted from PDF file"""
+        return self.metadata
+    
+    def _extract_metadata(self, pdf_path: str) -> Dict:
         """
-        Normalize date to ISO format (YYYY-MM-DD)
-
-        Handles formats: DD/MM/YYYY, DD-MM-YYYY, YYYY-MM-DD
+        Extract metadata from PDF (account number, account holder name, bank name)
+        
+        Reads the first page of the PDF and searches for:
+        - Account number (8+ digits)
+        - Account holder name (usually near account number)
+        - Bank name (explicit mentions or legends)
+        
+        Args:
+            pdf_path: Path to PDF file
+            
+        Returns:
+            Dictionary with metadata (account_number, account_holder_name, bank_name)
         """
-        date_str = date_str.strip()
-
-        # Try different formats
-        formats = [
-            '%d/%m/%Y',
-            '%d-%m-%Y',
-            '%Y-%m-%d',
-            '%d %b %Y',
-            '%d-%b-%Y',
-        ]
-
-        for fmt in formats:
-            try:
-                dt = datetime.strptime(date_str, fmt)
-                return dt.strftime('%Y-%m-%d')
-            except ValueError:
-                continue
-
-        # If all fail, return as-is
-        logger.warning(f"Could not parse date: {date_str}")
-        return date_str
-
+        metadata = {
+            'account_number': None,
+            'account_holder_name': None,
+            'bank_name': None,
+            'account_type': None  # Will be inferred if not found
+        }
+        
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                if not pdf.pages:
+                    return metadata
+                
+                # Extract text from first page (most likely to contain account metadata)
+                first_page = pdf.pages[0]
+                text = first_page.extract_text()
+                
+                if not text:
+                    logger.debug("First page has no text, trying second page...")
+                    if len(pdf.pages) > 1:
+                        text = pdf.pages[1].extract_text()
+                
+                if not text:
+                    logger.warning("No text found in first two pages for metadata extraction")
+                    return metadata
+                
+                lines = text.split('\n')
+                text_lower = text.lower()
+                
+                # Step 1: Extract account number and holder name
+                # Pattern 1: "Account Number: 055801511557 - NAGARJUN VEERAPU"
+                # Pattern 2: "055801511557 ( INR ) - NAGARJUN VEERAPU"
+                account_pattern = r'(\d{8,})\s*[^-]*-\s*([^,\n]+)'
+                account_match = re.search(account_pattern, text)
+                if account_match:
+                    metadata['account_number'] = account_match.group(1)
+                    metadata['account_holder_name'] = account_match.group(2).strip()
+                    logger.info(f"✅ Extracted account info: Number={metadata['account_number']}, Holder={metadata['account_holder_name']}")
+                else:
+                    # Fallback: Just find account number (8+ digits)
+                    account_num_match = re.search(r'(\d{8,})', text)
+                    if account_num_match:
+                        metadata['account_number'] = account_num_match.group(1)
+                        logger.info(f"✅ Extracted account number only: {metadata['account_number']}")
+                
+                # Step 2: Extract bank name from HEADER section only (first 20 lines)
+                # This avoids false positives from transaction descriptions
+                # Many statements have "YES BANK" or "HDFC BANK" in UPI transaction descriptions
+                header_text = '\n'.join(lines[:20]).lower()
+                
+                bank_patterns = {
+                    'ICICI Bank': ['icici bank', 'icici direct', 'within icici bank', 'icici bank account'],
+                    'HDFC Bank': ['hdfc bank', 'hdfc bank account'],
+                    'Axis Bank': ['axis bank', 'axis bank account'],
+                    'State Bank of India': ['state bank of india', 'sbi bank'],
+                    'Canara Bank': ['canara bank'],
+                    'YES Bank': ['yes bank account', 'yes bank ltd'],  # More specific patterns
+                    'Kotak Mahindra Bank': ['kotak mahindra', 'kotak bank'],
+                }
+                
+                # First, check header section only (more reliable)
+                for bank_name, patterns in bank_patterns.items():
+                    if any(pattern in header_text for pattern in patterns):
+                        metadata['bank_name'] = bank_name
+                        logger.info(f"✅ Extracted bank name from header: {bank_name}")
+                        break
+                
+                # If not found in header, try to infer from account number patterns
+                # ICICI account numbers often start with specific patterns (e.g., 055, 006, etc.)
+                if not metadata.get('bank_name') and metadata.get('account_number'):
+                    account_num = metadata['account_number']
+                    # ICICI account numbers are typically 12 digits, often starting with 055, 006, etc.
+                    if len(account_num) == 12 and account_num.startswith('055'):
+                        metadata['bank_name'] = 'ICICI Bank'
+                        logger.info(f"✅ Inferred bank name from account number pattern: ICICI Bank")
+                    elif len(account_num) == 12 and account_num.startswith('006'):
+                        metadata['bank_name'] = 'ICICI Bank'
+                        logger.info(f"✅ Inferred bank name from account number pattern: ICICI Bank")
+                    else:
+                        logger.info(f"⚠️  Could not detect bank name from header, account number: {account_num}")
+                
+                # Last resort: Check full text, but only if we still don't have a bank name
+                # This is less reliable as transaction descriptions may mention other banks
+                if not metadata.get('bank_name'):
+                    for bank_name, patterns in bank_patterns.items():
+                        # Skip YES Bank in full text check as it's often in UPI transactions
+                        if bank_name == 'YES Bank':
+                            continue
+                        if any(pattern in text_lower for pattern in patterns):
+                            metadata['bank_name'] = bank_name
+                            logger.info(f"✅ Extracted bank name from full text: {bank_name}")
+                            break
+                
+                # Step 3: Check legends/watermarks in text for bank name
+                # Many PDFs have bank name in legends like "Within ICICI Bank", "ICICI Direct", etc.
+                for line in lines[:50]:  # Check first 50 lines
+                    line_lower = line.lower()
+                    if 'within' in line_lower and 'bank' in line_lower:
+                        # Try to extract bank name from "Within [BANK NAME] Bank"
+                        within_match = re.search(r'within\s+([^,\n]+?)\s+bank', line_lower)
+                        if within_match:
+                            bank_text = within_match.group(1).strip().title()
+                            if bank_text:
+                                metadata['bank_name'] = f"{bank_text} Bank"
+                                logger.info(f"✅ Extracted bank name from legend: {metadata['bank_name']}")
+                                break
+                
+                # Step 4: Infer account type from text if possible
+                # Check if account type is mentioned in first page
+                if not metadata.get('account_type'):
+                    text_lower = text.lower()
+                    if 'credit card' in text_lower or 'credit card account' in text_lower:
+                        metadata['account_type'] = 'credit_card'
+                        logger.info("✅ Detected account type: credit_card")
+                    elif 'current account' in text_lower or 'salary account' in text_lower:
+                        metadata['account_type'] = 'current'
+                        logger.info("✅ Detected account type: current")
+                    elif 'savings account' in text_lower or 'savings' in text_lower:
+                        metadata['account_type'] = 'savings'
+                        logger.info("✅ Detected account type: savings")
+                
+                return metadata
+                
+        except Exception as e:
+            logger.warning(f"⚠️  Error extracting metadata from PDF: {e}")
+            return metadata
+    
     def get_success_info(self) -> Dict:
         """Get information about parsing success"""
         return {

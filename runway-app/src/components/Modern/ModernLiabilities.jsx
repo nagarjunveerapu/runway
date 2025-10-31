@@ -21,6 +21,8 @@ export default function ModernLiabilities({ onNavigate }) {
   const [liabilities, setLiabilities] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedType, setSelectedType] = useState(null);
+  const [amortizationFor, setAmortizationFor] = useState(null);
+  const [amortizationSchedule, setAmortizationSchedule] = useState([]);
   const [formData, setFormData] = useState({
     name: '',
     principalAmount: '',
@@ -94,6 +96,49 @@ export default function ModernLiabilities({ onNavigate }) {
       }
     } catch (error) {
       console.error('Error loading liabilities:', error);
+    }
+  };
+
+  const handleCloseLiability = async (liabilityId) => {
+    if (!window.confirm('Mark this liability as closed?')) return;
+    try {
+      const response = await fetch(`http://localhost:8000/api/v1/liabilities/${liabilityId}/close`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({})
+      });
+      if (response.ok) {
+        await loadLiabilities();
+      } else {
+        const err = await response.json();
+        alert('Failed to close liability: ' + (err.detail || 'unknown'));
+      }
+    } catch (e) {
+      alert('Error: ' + (e?.message || 'unknown'));
+    }
+  };
+
+  const handleViewAmortization = async (liability) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/v1/liabilities/${liability.liability_id}/amortization`, {
+        headers: {
+          'Authorization': `Bearer ${localStorage.getItem('token')}`
+        }
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setAmortizationFor(liability);
+        setAmortizationSchedule(Array.isArray(data.schedule) ? data.schedule : []);
+      } else {
+        setAmortizationFor(liability);
+        setAmortizationSchedule([]);
+      }
+    } catch (e) {
+      setAmortizationFor(liability);
+      setAmortizationSchedule([]);
     }
   };
 
@@ -351,14 +396,28 @@ export default function ModernLiabilities({ onNavigate }) {
                       <div className="text-xs text-gray-400 mt-1">Lender: {liability.lender_name}</div>
                     )}
                   </div>
-                  <button
-                    onClick={() => handleDeleteLiability(liability.liability_id)}
-                    className="ml-2 p-2 rounded-lg hover:bg-red-50 text-red-500 active:scale-95 transition-all"
-                  >
-                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
-                    </svg>
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleViewAmortization(liability)}
+                      className="px-2 py-1 rounded-md bg-blue-50 text-blue-600 text-xs hover:bg-blue-100"
+                    >
+                      Amortization
+                    </button>
+                    <button
+                      onClick={() => handleCloseLiability(liability.liability_id)}
+                      className="px-2 py-1 rounded-md bg-green-50 text-green-700 text-xs hover:bg-green-100"
+                    >
+                      Close
+                    </button>
+                    <button
+                      onClick={() => handleDeleteLiability(liability.liability_id)}
+                      className="p-2 rounded-lg hover:bg-red-50 text-red-500 active:scale-95 transition-all"
+                    >
+                      <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
             ))}
@@ -567,6 +626,39 @@ export default function ModernLiabilities({ onNavigate }) {
           </div>
         )}
       </div>
+      {/* Amortization Modal */}
+      {amortizationFor && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-end sm:items-center justify-center p-4">
+          <div className="bg-white rounded-t-3xl sm:rounded-3xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="p-4 border-b flex items-center justify-between">
+              <div className="font-semibold text-gray-900">Amortization - {amortizationFor.name}</div>
+              <button onClick={() => { setAmortizationFor(null); setAmortizationSchedule([]); }} className="p-2 rounded-md hover:bg-gray-100">✕</button>
+            </div>
+            <div className="p-4">
+              {amortizationSchedule && amortizationSchedule.length > 0 ? (
+                <div className="text-xs text-gray-700 space-y-2">
+                  <div className="grid grid-cols-4 gap-2 font-semibold text-gray-600">
+                    <div>Month</div><div>EMI</div><div>Principal</div><div>Balance</div>
+                  </div>
+                  {amortizationSchedule.slice(0, 24).map((row, idx) => (
+                    <div key={idx} className="grid grid-cols-4 gap-2">
+                      <div>{row.month}</div>
+                      <div>₹{Math.round(row.emi).toLocaleString('en-IN')}</div>
+                      <div>₹{Math.round(row.principal_paid).toLocaleString('en-IN')}</div>
+                      <div>₹{Math.round(row.balance).toLocaleString('en-IN')}</div>
+                    </div>
+                  ))}
+                  {amortizationSchedule.length > 24 && (
+                    <div className="text-[11px] text-gray-400 mt-2">Showing first 24 months…</div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-sm text-gray-600">No schedule available. Add interest rate, EMI and tenure for this loan.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

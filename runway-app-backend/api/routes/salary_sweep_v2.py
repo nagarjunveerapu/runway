@@ -26,6 +26,7 @@ from storage.models import User, Transaction, SalarySweepConfig, DetectedEMIPatt
 from auth.dependencies import get_current_user, get_db
 from config import Config
 from ml.categorizer import MLCategorizer
+from services.investment_detection import InvestmentDetector
 
 logger = logging.getLogger(__name__)
 
@@ -185,11 +186,8 @@ def categorize_recurring_payment(merchant: str, description: str) -> tuple[str, 
             return ('Insurance', 'Insurance Premium')
 
     # Check INVESTMENT (Mutual Funds, SIP)
-    investment_keywords = ['mutual fund', 'sip', 'systematic', 'zerodha', 'groww',
-                          'paytm money', 'et money', 'kuvera', 'coin dcb',
-                          'hdfc mf', 'icici prudential mf', 'sbi mf', 'axis mf',
-                          'kotak mf', 'nippon india', 'franklin templeton']
-    if any(kw in merchant_lower or kw in description_lower for kw in investment_keywords):
+    # Use shared detector for investment signals
+    if InvestmentDetector.is_investment_text(f"{merchant_lower} {description_lower}"):
         if any(kw in description_lower for kw in ['sip', 'systematic']):
             return ('Investment', 'Mutual Fund SIP')
         else:
@@ -216,6 +214,88 @@ def categorize_recurring_payment(merchant: str, description: str) -> tuple[str, 
     return ('Loan', 'Recurring Payment')
 
 
+def _keyword_sets():
+    """Central source of keyword lists for categorization."""
+    return {
+        'exclude_merchant': ['sweep', 'transfer', 'ndr fruits'],
+        'exclude_desc': ['upi/', 'paytm'],
+        # Domain-specific exclusions that frequently cause false positives
+        'exclude_investment_desc': ['fastag', 'fast tag', 'toll', 'parking', 'metro card', 'recharge fastag', 'npci fastag', 'hdfc fastag', 'icici fastag', 'sbi fastag'],
+        'loan_merchants': [
+            'canfin', 'bajaj finserv', 'bajaj finance', 'tata capital', 'fullerton',
+            'iifl', 'mahindra finance', 'cholamandalam', 'l&t finance', 'lic housing',
+            'dhfl', 'indiabulls', 'housing finance'
+        ],
+        'loan_desc': [
+            'emi', 'personal loan', 'home loan', 'car loan', 'auto loan',
+            'housing loan', 'loan emi', 'canfinhomesltd', 'housingloan'
+        ],
+        'insurance': [
+            'sbi life', 'lic', 'hdfc life', 'icici prudential', 'max life',
+            'bajaj allianz', 'tata aia', 'birla sun life', 'insurance',
+            'kotak life', 'pnb metlife', 'star health', 'care health',
+            'religare health', 'aditya birla health', 'niva bupa'
+        ],
+        'investment': [
+            'mutual fund', 'sip', 'systematic', 'zerodha', 'groww', 'paytm money',
+            'et money', 'kuvera', 'coin dcb', 'hdfc mf', 'icici prudential mf',
+            'sbi mf', 'axis mf', 'kotak mf', 'nippon india', 'franklin templeton'
+        ],
+        'govt': [
+            'apy', 'atal pension', 'nps', 'national pension', 'ppf', 'public provident',
+            'epf', 'employee provident', 'esi', 'employee state insurance',
+            'sukanya samriddhi', 'pmjjby', 'pmsby', 'pm jeevan', 'pm suraksha'
+        ],
+    }
+
+
+def _classify_financial_flags(merchant_lower: str, description_lower: str) -> tuple[bool, bool, bool, bool]:
+    """Return tuple flags for (is_loan, is_insurance, is_investment, is_govt)."""
+    ks = _keyword_sets()
+    is_loan = (
+        any(l in merchant_lower for l in ks['loan_merchants']) or
+        any(k in description_lower for k in ks['loan_desc'])
+    )
+    is_insurance = any(k in merchant_lower or k in description_lower for k in ks['insurance'])
+    # Investment with guardrails: avoid common FASTag/toll false positives that include 'SIP' substrings
+    investment_candidate = any(k in merchant_lower or k in description_lower for k in ks['investment'])
+    has_investment_exclusions = any(k in merchant_lower or k in description_lower for k in ks['exclude_investment_desc'])
+    is_investment = investment_candidate and not has_investment_exclusions
+    is_govt = any(k in merchant_lower or k in description_lower for k in ks['govt'])
+    return is_loan, is_insurance, is_investment, is_govt
+
+
+def _should_include_txn(txn: Transaction, min_amount: float = 500) -> bool:
+    """Unified filter used across detection flows for selecting candidate debit transactions."""
+    # Normalize transaction type: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
+    txn_type = txn.type.lower() if txn.type else ''
+    is_debit = txn_type in ['debit', 'withdrawal']
+    
+    if not is_debit or txn.amount < min_amount:
+        return False
+    merchant_lower = (txn.merchant_canonical or '').lower()
+    description_lower = (txn.description_raw or '').lower()
+    ks = _keyword_sets()
+    # Hard exclude FASTag/toll-like items from recurring obligation detection
+    if any(ex in merchant_lower or ex in description_lower for ex in ks['exclude_investment_desc']):
+        return False
+    if any(ex in description_lower for ex in ks['exclude_desc']):
+        return False
+    if any(ex in merchant_lower for ex in ks['exclude_merchant']):
+        return False
+    is_loan, is_insurance, is_investment, is_govt = _classify_financial_flags(merchant_lower, description_lower)
+    return is_loan or is_insurance or is_investment or is_govt
+
+
+def _filter_financial_transactions(transactions: List[Transaction], min_amount: float = 500) -> List[Transaction]:
+    """Apply shared filtering to get candidate financial obligation transactions."""
+    results: List[Transaction] = []
+    for txn in transactions:
+        if _should_include_txn(txn, min_amount=min_amount):
+            results.append(txn)
+    return results
+
+
 def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
     """Detect recurring salary credits by amount similarity and salary keywords"""
     # Filter for credit transactions
@@ -223,7 +303,11 @@ def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
     if transactions:
         logger.info(f"🧐 Sample transaction types: {[txn.type for txn in transactions[:5]]}")
 
-    credit_txns = [txn for txn in transactions if txn.type == 'credit']
+    # Normalize transaction types: handle both 'deposit'/'withdrawal' and 'credit'/'debit'
+    credit_txns = [
+        txn for txn in transactions 
+        if txn.type and txn.type.lower() in ['credit', 'deposit']
+    ]
 
     logger.info(f"🧐 SALARY DETECTION DEBUG: Analyzing {len(credit_txns)} credit transactions")
     
@@ -339,18 +423,131 @@ def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
     # Filter groups with at least 2 occurrences
     recurring_patterns = [g for g in amount_groups if len(g) >= 2]
     
+    def extract_merchant_from_description(description: str, merchant: str) -> str:
+        """Extract merchant/employer name from description if merchant is generic.
+        
+        Uses intelligent pattern matching to extract company names from transaction descriptions.
+        Works with NEFT/RTGS formats, UPI formats, and various other transaction formats.
+        """
+        import re
+        
+        if merchant and merchant.lower() not in ['other', 'unknown', '']:
+            return merchant
+        
+        if not description:
+            return "Salary"
+        
+        desc = description.strip()
+        desc_lower = desc.lower()
+        
+        # Pattern 1: NEFT/RTGS format - "NEFT-...-COMPANY NAME PVT LTD-..." or "RTGS-...-COMPANY NAME-..."
+        # Example: "NEFT-CITIN52025102945632523-CAPITAL ONE SERVICES I PVT LTD--0035493018-CITI00000"
+        neft_rtgs_patterns = [
+            r'(?:NEFT|RTGS)[-:]\s*\w+\s*[-:]\s*([A-Z][A-Z\s&]+?(?:PVT|LTD|INC|LLC|CORP|LLP|SERVICES|TECHNOLOGIES|SOLUTIONS)[^\s-]*)',
+            r'(?:NEFT|RTGS)[-:]\s*\w+\s*[-:]\s*([A-Z][A-Z\s&]+?)\s*[-:]',
+            r'(?:NEFT|RTGS)[-:]\s*([A-Z][A-Z\s&]+?)\s*PVT',
+            r'(?:NEFT|RTGS)[-:]\s*([A-Z][A-Z\s&]+?)\s*LTD',
+        ]
+        
+        for pattern in neft_rtgs_patterns:
+            match = re.search(pattern, desc, re.IGNORECASE)
+            if match:
+                company_name = match.group(1).strip()
+                # Clean up: remove trailing dashes, extra spaces
+                company_name = re.sub(r'\s+[-]+\s*$', '', company_name)
+                company_name = re.sub(r'\s+', ' ', company_name)
+                
+                # Extract meaningful part (before PVT/LTD/etc if present)
+                # "CAPITAL ONE SERVICES I PVT LTD" -> "CAPITAL ONE SERVICES"
+                company_match = re.search(r'^([A-Z][A-Z\s&]+?)\s+(?:PVT|LTD|INC|LLC|CORP|LLP)', company_name, re.IGNORECASE)
+                if company_match:
+                    company_name = company_match.group(1).strip()
+                
+                # Properly capitalize: "CAPITAL ONE" -> "Capital One"
+                words = company_name.split()
+                # Handle special cases like "I" in "SERVICES I PVT LTD"
+                capitalized_words = []
+                for word in words:
+                    # Skip single letter words that are likely part of legal entity names
+                    if len(word) == 1 and word.upper() in ['I', 'A']:
+                        continue
+                    # Capitalize properly
+                    if word.isupper():
+                        capitalized_words.append(word.capitalize())
+                    else:
+                        capitalized_words.append(word.title())
+                
+                if capitalized_words:
+                    result = ' '.join(capitalized_words)
+                    # Remove common suffixes that shouldn't be in the name
+                    result = re.sub(r'\s+(Services|Technologies|Solutions|Systems)\s*$', '', result, flags=re.IGNORECASE)
+                    if result and len(result) > 2:
+                        return result
+        
+        # Pattern 2: Look for employer patterns from known list (for normalization)
+        for employer in employer_patterns:
+            if employer in desc_lower:
+                # Extract the employer name from description with proper case
+                employer_pattern = r'\b(' + re.escape(employer) + r'[^\s-]*)'
+                match = re.search(employer_pattern, desc, re.IGNORECASE)
+                if match:
+                    found_text = match.group(1)
+                    # Properly capitalize
+                    words = found_text.split()
+                    if len(words) >= 2:
+                        # Multi-word: capitalize each word
+                        return ' '.join(word.capitalize() for word in words[:2])
+                    else:
+                        # Single word
+                        return found_text.capitalize()
+        
+        # Pattern 3: Look for company-like patterns in uppercase
+        # Match sequences of 2+ uppercase words that look like company names
+        company_pattern = r'\b([A-Z]{2,}(?:\s+[A-Z]{2,}){1,3})(?:\s+(?:PVT|LTD|INC|LLC|CORP|LLP|SERVICES))?'
+        match = re.search(company_pattern, desc)
+        if match:
+            company_name = match.group(1).strip()
+            # Skip if it looks like a bank name or transaction code
+            skip_patterns = ['NEFT', 'RTGS', 'UPI', 'IMPS', 'CITI', 'HDFC', 'ICICI', 'SBI', 'AXIS']
+            if not any(skip in company_name.upper() for skip in skip_patterns):
+                # Properly capitalize
+                words = company_name.split()
+                if len(words) >= 2 and len(words) <= 4:  # Reasonable company name length
+                    capitalized = ' '.join(word.capitalize() for word in words)
+                    if len(capitalized) >= 4:  # At least 4 chars
+                        return capitalized
+        
+        # Pattern 4: Extract from INF/INFT format - "INF/INFT/COMPANY"
+        inf_match = re.search(r'INF[/-]\s*\w+\s*[/-]\s*([A-Z][A-Z\s&]+)', desc, re.IGNORECASE)
+        if inf_match:
+            company_name = inf_match.group(1).strip()
+            words = company_name.split()
+            if len(words) >= 1 and len(words) <= 3:
+                return ' '.join(word.capitalize() for word in words[:2])  # Take first 2 words max
+        
+        # Fallback: return original merchant or "Salary"
+        return merchant or "Salary"
+    
     # If we have single salary candidates, prioritize them if no recurring patterns exist
     if single_salary_candidates and not recurring_patterns:
         # Use the largest single salary candidate
         best_single = max(single_salary_candidates, key=lambda t: t.amount)
+        
+        # Extract merchant name from description if merchant is generic
+        detected_source = extract_merchant_from_description(
+            best_single.description_raw or '',
+            best_single.merchant_canonical or ''
+        )
+        
         logger.info(f"\n{'='*80}")
         logger.info(f"✅ SALARY DETECTED: Single Transaction")
-        logger.info(f"   Source: {best_single.merchant_canonical}")
+        logger.info(f"   Original Merchant: {best_single.merchant_canonical}")
+        logger.info(f"   Detected Source: {detected_source}")
         logger.info(f"   Amount: ₹{best_single.amount:,.2f}")
         logger.info(f"   Date: {best_single.date}")
         logger.info(f"   Reason: No recurring patterns found, using largest single match")
         return {
-            'source': best_single.merchant_canonical or "Salary",
+            'source': detected_source,
             'amount': best_single.amount,
             'count': 1,
             'txns': [best_single]
@@ -405,12 +602,19 @@ def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
 
         # If the single salary candidate is significantly larger (30% more), use it
         if largest_single.amount > pattern_avg * 1.3:
+            # Extract merchant name from description if merchant is generic
+            detected_source = extract_merchant_from_description(
+                largest_single.description_raw or '',
+                largest_single.merchant_canonical or ''
+            )
+            
             logger.info(f"\n{'='*80}")
             logger.info(f"✅ SALARY DETECTED: Single Large Transaction (Higher than recurring pattern)")
-            logger.info(f"   Source: {largest_single.merchant_canonical}")
+            logger.info(f"   Original Merchant: {largest_single.merchant_canonical}")
+            logger.info(f"   Detected Source: {detected_source}")
             logger.info(f"   Amount: ₹{largest_single.amount:,.2f}")
             return {
-                'source': largest_single.merchant_canonical or "Salary",
+                'source': detected_source,
                 'amount': largest_single.amount,
                 'count': 1,
                 'txns': [largest_single]
@@ -435,10 +639,24 @@ def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
     merchants = [txn.merchant_canonical for txn in txns if txn.merchant_canonical]
     most_common_merchant = max(set(merchants), key=merchants.count) if merchants else "Recurring Credit"
     
+    # Extract merchant name from description if merchant is generic
+    # Try to find a transaction with a description that has employer info
+    detected_source = most_common_merchant
+    for txn in txns:
+        if txn.description_raw:
+            extracted = extract_merchant_from_description(
+                txn.description_raw,
+                txn.merchant_canonical or ''
+            )
+            if extracted.lower() not in ['other', 'unknown', 'salary', 'recurring credit']:
+                detected_source = extracted
+                break
+    
     logger.info(f"\n{'='*80}")
     logger.info(f"✅ SALARY DETECTED: Recurring Pattern")
     logger.info(f"   Reason: {'; '.join(detection_reason)}")
-    logger.info(f"   Source: {most_common_merchant}")
+    logger.info(f"   Original Merchant: {most_common_merchant}")
+    logger.info(f"   Detected Source: {detected_source}")
     logger.info(f"   Average Amount: ₹{avg_amount:,.2f}")
     logger.info(f"   Occurrences: {len(amounts)}")
     logger.info(f"   Transactions:")
@@ -448,7 +666,7 @@ def detect_salary_pattern(transactions: List[Transaction]) -> Optional[dict]:
         logger.info(f"     ... and {len(txns)-5} more")
     
     return {
-        'source': most_common_merchant,
+        'source': detected_source,
         'amount': avg_amount,
         'count': len(amounts),
         'txns': txns
@@ -468,7 +686,7 @@ def analyze_emi_pattern_changes(
     # Get current EMI transactions matching this pattern
     merchant = existing_pattern.merchant_source
     current_emis = [t for t in current_transactions
-                   if t.merchant_canonical == merchant and t.type == 'debit']
+                   if t.merchant_canonical == merchant and (t.type or '').lower() in ['debit', 'withdrawal']]
 
     if not current_emis:
         return ('delete', f'No recent transactions found for {merchant}. EMI may have been closed.')
@@ -686,50 +904,8 @@ async def detect_or_refresh_patterns(
             # Detect ALL patterns (same logic as new detection)
             logger.info("Detecting all recurring financial obligations...")
 
-            # Apply comprehensive filtering
-            financial_transactions = []
-            for txn in all_transactions:
-                if txn.type != 'debit' or txn.amount < 100:  # Lower threshold for investments/schemes
-                    continue
-
-                merchant_lower = (txn.merchant_canonical or '').lower()
-                description_lower = (txn.description_raw or '').lower()
-
-                # Skip UPI and generic transfers
-                if 'upi/' in description_lower or 'paytm' in description_lower:
-                    continue
-                if any(word in merchant_lower for word in ['sweep', 'transfer', 'ndr fruits']):
-                    continue
-
-                # Check if it's a financial obligation (loan, insurance, investment, scheme)
-                is_loan = any(lender in merchant_lower for lender in [
-                    'canfin', 'bajaj finserv', 'bajaj finance', 'tata capital',
-                    'fullerton', 'iifl', 'mahindra finance', 'cholamandalam',
-                    'l&t finance', 'lic housing', 'dhfl', 'indiabulls',
-                    'personal loan', 'home loan', 'car loan', 'housing finance'
-                ])
-                has_loan_keywords = any(kw in description_lower for kw in [
-                    'emi', 'personal loan', 'home loan', 'car loan', 'auto loan',
-                    'housing loan', 'loan emi', 'canfinhomesltd', 'housingloan'
-                ])
-
-                is_insurance = any(kw in description_lower for kw in [
-                    'sbi life', 'lic', 'hdfc life', 'icici prudential', 'insurance',
-                    'bajaj allianz', 'tata aia', 'max life', 'policy', 'premium'
-                ])
-
-                is_investment = any(kw in description_lower for kw in [
-                    'mutual fund', 'sip', 'systematic', 'zerodha', 'groww',
-                    'paytm money', 'et money', 'kuvera', 'investment'
-                ])
-
-                is_govt_scheme = any(kw in description_lower for kw in [
-                    'apy', 'atal pension', 'nps', 'national pension', 'ppf',
-                    'provident fund', 'epf', 'sukanya', 'postal'
-                ])
-
-                if is_loan or has_loan_keywords or is_insurance or is_investment or is_govt_scheme:
-                    financial_transactions.append(txn)
+            # Apply comprehensive filtering (shared helper)
+            financial_transactions = _filter_financial_transactions(all_transactions, min_amount=100)
 
             # Group by merchant and exact amount
             debit_patterns = defaultdict(lambda: defaultdict(list))
@@ -855,67 +1031,17 @@ async def detect_or_refresh_patterns(
             logger.info("Identifying all recurring financial obligations...")
 
             # Get all debit transactions
-            debit_txns = [t for t in all_transactions if t.type == 'debit']
+            # Normalize transaction types: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
+            debit_txns = [t for t in all_transactions if (t.type or '').lower() in ['debit', 'withdrawal']]
 
-            # Filter transactions using comprehensive multi-category detection
-            financial_transactions = []
-
-            for txn in debit_txns:
-                # Minimum amount threshold
-                if txn.amount < 500:  # Lower threshold to catch insurance/schemes
-                    continue
-
+            # Filter transactions using comprehensive multi-category detection (shared helper)
+            financial_transactions = _filter_financial_transactions(debit_txns, min_amount=500)
+            for txn in financial_transactions:
                 merchant_lower = (txn.merchant_canonical or '').lower()
                 description_lower = (txn.description_raw or '').lower()
-
-                # Skip UPI transactions
-                if 'upi/' in description_lower or 'paytm' in description_lower:
-                    continue
-
-                # Skip generic transfers/sweeps
-                if any(word in merchant_lower for word in ['sweep', 'transfer', 'ndr fruits']):
-                    continue
-
-                # Check if it's a LOAN/EMI
-                is_loan = any(lender in merchant_lower for lender in [
-                    'canfin', 'bajaj finserv', 'bajaj finance', 'tata capital',
-                    'fullerton', 'iifl', 'mahindra finance', 'cholamandalam',
-                    'l&t finance', 'lic housing', 'dhfl', 'indiabulls',
-                    'personal loan', 'home loan', 'car loan', 'housing finance'
-                ]) or any(kw in description_lower for kw in [
-                    'emi', 'personal loan', 'home loan', 'car loan', 'auto loan',
-                    'housing loan', 'loan emi', 'canfinhomesltd', 'housingloan'
-                ])
-
-                # Check if it's INSURANCE
-                is_insurance = any(kw in merchant_lower or kw in description_lower for kw in [
-                    'sbi life', 'lic', 'hdfc life', 'icici prudential', 'max life',
-                    'bajaj allianz', 'tata aia', 'birla sun life', 'insurance',
-                    'kotak life', 'pnb metlife', 'star health', 'care health',
-                    'religare health', 'aditya birla health', 'niva bupa'
-                ])
-
-                # Check if it's INVESTMENT (Mutual Fund SIP)
-                is_investment = any(kw in merchant_lower or kw in description_lower for kw in [
-                    'mutual fund', 'sip', 'systematic', 'zerodha', 'groww',
-                    'paytm money', 'et money', 'kuvera', 'coin dcb',
-                    'hdfc mf', 'icici prudential mf', 'sbi mf', 'axis mf',
-                    'kotak mf', 'nippon india', 'franklin templeton'
-                ])
-
-                # Check if it's GOVERNMENT SCHEME
-                is_govt_scheme = any(kw in merchant_lower or kw in description_lower for kw in [
-                    'apy', 'atal pension', 'nps', 'national pension', 'ppf',
-                    'public provident', 'epf', 'employee provident', 'esi',
-                    'employee state insurance', 'sukanya samriddhi', 'pmjjby',
-                    'pmsby', 'pm jeevan', 'pm suraksha'
-                ])
-
-                # If matches any category, add to financial transactions
-                if is_loan or is_insurance or is_investment or is_govt_scheme:
-                    financial_transactions.append(txn)
-                    category = 'Loan' if is_loan else 'Insurance' if is_insurance else 'Investment' if is_investment else 'Govt Scheme'
-                    logger.info(f"Identified {category}: {txn.merchant_canonical} - ₹{txn.amount}")
+                is_loan, is_insurance, is_investment, is_govt = _classify_financial_flags(merchant_lower, description_lower)
+                category = 'Loan' if is_loan else 'Insurance' if is_insurance else 'Investment' if is_investment else 'Govt Scheme'
+                logger.info(f"Identified {category}: {txn.merchant_canonical} - ₹{txn.amount}")
 
             logger.info(f"Total identified financial obligation transactions: {len(financial_transactions)}")
 
@@ -1068,7 +1194,9 @@ async def confirm_and_save_config(
         # Apply same comprehensive multi-category filtering as detect endpoint
         financial_transactions = []
         for txn in all_transactions:
-            if txn.type != 'debit' or txn.amount < 500:
+            # Normalize transaction type: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
+            txn_type = (txn.type or '').lower()
+            if txn_type not in ['debit', 'withdrawal'] or txn.amount < 500:
                 continue
 
             merchant_lower = (txn.merchant_canonical or '').lower()
@@ -1498,7 +1626,6 @@ class RecurringPaymentsByCategoryResponse(BaseModel):
     investments: List[EMIPatternResponse]
     government_schemes: List[EMIPatternResponse]
 
-
 @router.get("/recurring-payments", response_model=RecurringPaymentsByCategoryResponse)
 async def get_recurring_payments_by_category(
     current_user: User = Depends(get_current_user),
@@ -1557,16 +1684,25 @@ async def get_recurring_payments_by_category(
                 mapped_as = 'liability'
                 mapped_entity_id = mapped_liability.liability_id
             else:
-                # Asset mapping via notes contains pattern_id
-                mapped_asset = session.query(Asset).filter(
+                # Prefer direct asset link via recurring_pattern_id
+                a = session.query(Asset).filter(
                     Asset.user_id == current_user.user_id,
-                    Asset.notes.isnot(None)
-                ).all()
-                for a in mapped_asset:
-                    if a.notes and pattern.pattern_id in str(a.notes):
-                        mapped_as = 'asset'
-                        mapped_entity_id = a.asset_id
-                        break
+                    Asset.recurring_pattern_id == pattern.pattern_id
+                ).first()
+                if a:
+                    mapped_as = 'asset'
+                    mapped_entity_id = a.asset_id
+                else:
+                    # Fallback: Asset notes contains pattern_id
+                    mapped_asset = session.query(Asset).filter(
+                        Asset.user_id == current_user.user_id,
+                        Asset.notes.isnot(None)
+                    ).all()
+                    for a in mapped_asset:
+                        if a.notes and pattern.pattern_id in str(a.notes):
+                            mapped_as = 'asset'
+                            mapped_entity_id = a.asset_id
+                            break
 
             emi_response = EMIPatternResponse(
                 pattern_id=pattern.pattern_id,

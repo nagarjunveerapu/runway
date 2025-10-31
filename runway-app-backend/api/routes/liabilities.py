@@ -39,8 +39,26 @@ async def get_liabilities(
         liabilities = session.query(Liability).filter(
             Liability.user_id == current_user.user_id
         ).all()
+
+        # Deduplicate by recurring_pattern_id
+        by_pattern = {}
+        unique_liabs = []
+        for l in liabilities:
+            pid = getattr(l, 'recurring_pattern_id', None)
+            if not pid:
+                unique_liabs.append(l)
+                continue
+            existing = by_pattern.get(pid)
+            if not existing:
+                by_pattern[pid] = l
+            else:
+                prev_updated = existing.updated_at or existing.created_at
+                curr_updated = l.updated_at or l.created_at
+                if curr_updated and prev_updated and curr_updated > prev_updated:
+                    by_pattern[pid] = l
+        unique_liabs.extend([v for v in by_pattern.values()])
         
-        return [liability.to_dict() for liability in liabilities]
+        return [liability.to_dict() for liability in unique_liabs]
     finally:
         session.close()
 
@@ -96,6 +114,34 @@ async def create_liability(
         original_tenure = liability_data.get('original_tenure_months')
         if start_date_obj and original_tenure:
             end_date_obj = start_date_obj + relativedelta(months=int(original_tenure))
+
+        # Upsert by recurring_pattern_id to avoid duplicates for same EMI mapping
+        existing = None
+        rp_id = liability_data.get('recurring_pattern_id')
+        if rp_id:
+            existing = session.query(Liability).filter(
+                Liability.user_id == current_user.user_id,
+                Liability.recurring_pattern_id == rp_id
+            ).first()
+
+        if existing:
+            # Update selected fields
+            fields = [
+                'name','liability_type','principal_amount','outstanding_balance','interest_rate',
+                'emi_amount','rate_type','rate_reset_frequency_months','processing_fee',
+                'prepayment_penalty_pct','original_tenure_months','remaining_tenure_months',
+                'lender_name','status'
+            ]
+            for f in fields:
+                if f in liability_data and liability_data[f] is not None:
+                    setattr(existing, f, liability_data[f])
+            if start_date_obj:
+                existing.start_date = start_date_obj
+            if end_date_obj:
+                existing.end_date = end_date_obj
+            session.commit()
+            session.refresh(existing)
+            return existing.to_dict()
 
         liability = Liability(
             liability_id=str(uuid.uuid4()),

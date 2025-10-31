@@ -80,7 +80,8 @@ def main():
                     merchant_raw=txn.get('merchant_raw', '')[:255] or None,
                     merchant_canonical=txn.get('merchant_canonical', '')[:255] or None,
                     category=txn.get('category', 'Unknown')[:100],
-                    balance=float(txn.get('balance', 0)) if txn.get('balance') else None,
+                    # Fix: Check 'is not None' instead of truthiness, as 0.0 is falsy but valid
+                    balance=float(txn.get('balance')) if txn.get('balance') is not None else None,
                     source='pdf_upload',
                     is_duplicate=False,
                     duplicate_count=0

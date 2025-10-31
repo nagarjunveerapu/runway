@@ -52,6 +52,8 @@ export default function ModernAccounts() {
     accountNumber: ''
   });
   const [uploadingFor, setUploadingFor] = useState(null);
+  const [uploadResult, setUploadResult] = useState({}); // Store results by accountId
+  const [uploadError, setUploadError] = useState({}); // Store errors by accountId
 
   // Load accounts from API
   useEffect(() => {
@@ -135,6 +137,18 @@ export default function ModernAccounts() {
     const file = event.target.files[0];
     if (!file) return;
 
+    // Clear previous results for this specific account
+    setUploadResult(prev => {
+      const newResult = { ...prev };
+      delete newResult[accountId];
+      return newResult;
+    });
+    setUploadError(prev => {
+      const newError = { ...prev };
+      delete newError[accountId];
+      return newError;
+    });
+
     // Upload directly from here
     try {
       const formData = new FormData();
@@ -146,7 +160,7 @@ export default function ModernAccounts() {
       
       // Determine endpoint based on file type
       const isPDF = file.name.endsWith('.pdf') || file.type === 'application/pdf';
-      const endpoint = isPDF ? '/upload/pdf' : '/upload/csv-smart';
+      const endpoint = isPDF ? '/upload/pdf-smart' : '/upload/csv-smart';  // Use parser service for both
       
       const response = await api.post(endpoint, formData, {
         headers: {
@@ -154,15 +168,31 @@ export default function ModernAccounts() {
         },
       });
 
-      alert(`✅ Upload successful!\n${response.data.transactions_imported || response.data.transactions_created} transactions imported.`);
+      // Show detailed result for this specific account
+      setUploadResult(prev => ({
+        ...prev,
+        [accountId]: response.data
+      }));
       
       // Reset file input
       event.target.value = '';
       
-      // Reload the page to show updated data
-      window.location.reload();
+      // Reload data after 2 seconds
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
     } catch (err) {
-      alert('Upload failed: ' + (err?.response?.data?.detail || 'unknown error'));
+      // Store error for this specific account
+      setUploadError(prev => ({
+        ...prev,
+        [accountId]: err?.response?.data?.detail || 'Upload failed: unknown error'
+      }));
+      // Clear result for this account
+      setUploadResult(prev => {
+        const newResult = { ...prev };
+        delete newResult[accountId];
+        return newResult;
+      });
     } finally {
       setUploadingFor(null);
     }
@@ -291,6 +321,63 @@ export default function ModernAccounts() {
                       )}
                     </div>
                   </label>
+
+                  {/* Upload Result - Show only for this specific account */}
+                  {uploadResult[account.account_id] && !uploadingFor && (
+                    <div className="mt-3 bg-green-50 border-l-4 border-green-400 rounded-lg p-4">
+                      <div className="flex items-start">
+                        <span className="text-2xl mr-3">✓</span>
+                        <div className="flex-1">
+                          <p className="font-semibold text-green-800 mb-2">Upload Successful!</p>
+                          <div className="space-y-1 text-sm">
+                            <div className="flex items-center justify-between">
+                              <span className="text-green-700">📊 Transactions imported:</span>
+                              <span className="font-bold text-green-800">
+                                {uploadResult[account.account_id].transactions_imported || uploadResult[account.account_id].transactions_created || 0}
+                              </span>
+                            </div>
+                            {uploadResult[account.account_id].duplicates_found > 0 && (
+                              <div className="flex items-center justify-between bg-yellow-100 rounded p-2 mt-1">
+                                <span className="text-orange-700">🔄 Duplicates skipped:</span>
+                                <span className="font-bold text-orange-800">
+                                  {uploadResult[account.account_id].duplicates_found}
+                                </span>
+                              </div>
+                            )}
+                            {uploadResult[account.account_id].emis_identified > 0 && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-green-700">💳 EMIs identified:</span>
+                                <span className="font-bold text-green-800">
+                                  {uploadResult[account.account_id].emis_identified}
+                                </span>
+                              </div>
+                            )}
+                            {uploadResult[account.account_id].assets_created > 0 && (
+                              <div className="flex items-center justify-between">
+                                <span className="text-green-700">🏠 Assets created:</span>
+                                <span className="font-bold text-green-800">
+                                  {uploadResult[account.account_id].assets_created}
+                                </span>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Upload Error - Show only for this specific account */}
+                  {uploadError[account.account_id] && !uploadingFor && (
+                    <div className="mt-3 bg-red-50 border-l-4 border-red-400 rounded-lg p-4">
+                      <div className="flex items-start">
+                        <span className="text-2xl mr-3">⚠️</span>
+                        <div>
+                          <p className="font-semibold text-red-800 mb-1">Upload Failed</p>
+                          <p className="text-sm text-red-700">{uploadError[account.account_id]}</p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             ))}

@@ -8,7 +8,7 @@ import logging
 from typing import List, Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime
-from sqlalchemy import create_engine, func
+from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
@@ -81,6 +81,39 @@ class DatabaseManager:
         # Create all tables
         Base.metadata.create_all(bind=self.engine)
         logger.info("Database tables created successfully")
+        
+        # Create unique constraint for duplicate prevention
+        # Includes balance to differentiate same transaction at different times in the day
+        # Uses COALESCE to normalize NULL balance to sentinel value (-999999999.99)
+        # SQLite UNIQUE constraint treats NULL as distinct, so we normalize NULLs
+        session = self.get_session()
+        try:
+            # Drop existing index if it exists (without COALESCE)
+            try:
+                session.execute(text("DROP INDEX IF EXISTS idx_transaction_unique"))
+                session.commit()
+            except:
+                pass
+            
+            # Create new unique index with COALESCE to handle NULL balance
+            session.execute(text("""
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_transaction_unique 
+                ON transactions(
+                    user_id, 
+                    account_id, 
+                    date, 
+                    amount, 
+                    description_raw, 
+                    COALESCE(balance, -999999999.99)
+                )
+            """))
+            session.commit()
+            logger.info("Unique constraint created successfully (includes balance with NULL normalization)")
+        except Exception as e:
+            session.rollback()
+            logger.warning(f"Could not create unique constraint: {e}")
+        finally:
+            session.close()
 
     def get_session(self) -> Session:
         """Get a new database session"""

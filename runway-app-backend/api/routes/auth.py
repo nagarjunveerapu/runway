@@ -110,8 +110,10 @@ async def login(credentials: UserLogin, db: DatabaseManager = Depends(get_db)):
     session = db.get_session()
     
     try:
-        # Find user by username
-        user = session.query(User).filter(User.username == credentials.username).first()
+        # Find user by username OR email (accept either in the username field)
+        user = session.query(User).filter(
+            (User.username == credentials.username) | (User.email == credentials.username)
+        ).first()
         
         if not user:
             raise HTTPException(

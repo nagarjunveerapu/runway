@@ -9,6 +9,9 @@ echo ""
 
 cd runway-app-backend
 
+# Ensure backend uses its own DB path
+export DATABASE_URL="sqlite:///data/finance.db"
+
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then
     echo "📦 Creating virtual environment..."

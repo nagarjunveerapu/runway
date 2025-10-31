@@ -212,6 +212,8 @@ class Asset(Base):
     purchase_price = Column(Float)
     current_value = Column(Float)
     purchase_date = Column(DateTime)
+    # Link to EMI pattern if created from recurring payment
+    recurring_pattern_id = Column(String(36), index=True)
     
     # Metadata
     liquid = Column(Boolean, default=False)
@@ -239,6 +241,7 @@ class Asset(Base):
             'purchase_price': self.purchase_price,
             'current_value': self.current_value,
             'purchase_date': self.purchase_date.isoformat() if self.purchase_date else None,
+            'recurring_pattern_id': self.recurring_pattern_id,
             'liquid': self.liquid,
             'disposed': self.disposed,
             'notes': self.notes,
@@ -532,7 +535,7 @@ User.detected_emi_patterns = relationship('DetectedEMIPattern', back_populates='
 User.net_worth_snapshots = relationship('NetWorthSnapshot', back_populates='user', cascade='all, delete-orphan')
 
 # Indexes for performance
-from sqlalchemy import Index
+from sqlalchemy import Index, UniqueConstraint
 
 # Composite indexes for common queries
 Index('idx_user_date', Transaction.user_id, Transaction.date)
@@ -541,7 +544,17 @@ Index('idx_date_category', Transaction.date, Transaction.category)
 Index('idx_merchant_date', Transaction.merchant_canonical, Transaction.date)
 Index('idx_user_month', Transaction.user_id, Transaction.month)
 Index('idx_asset_user', Asset.user_id)
+Index('idx_asset_recurring_pattern', Asset.recurring_pattern_id)
 Index('idx_liquidation_user', Liquidation.user_id, Liquidation.asset_id)
 Index('idx_liability_user', Liability.user_id)
 Index('idx_liability_pattern', Liability.recurring_pattern_id)
 Index('idx_net_worth_user_month', NetWorthSnapshot.user_id, NetWorthSnapshot.month)
+
+# Unique constraint to prevent exact duplicate transactions
+# NOTE: SQLite UNIQUE constraint treats NULL as distinct, so we can't use balance directly
+# We need to use COALESCE in raw SQL to normalize NULL values
+# This unique index is created via raw SQL in database.py and reset_and_setup.py
+# INCLUDES BALANCE: Two transactions with same date/amount/description but different balances 
+# are considered different (e.g., same transaction at different times in the day)
+# NULL balance is normalized to -999999999.99 to handle NULL comparison correctly
+# Index('idx_transaction_unique', ...) - Created via raw SQL instead (see database.py)

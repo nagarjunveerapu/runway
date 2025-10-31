@@ -113,7 +113,7 @@ def main():
     try:
         # Get test user
         from storage.models import User
-        user = session.query(User).filter(User.username == "testuser").first()
+        user = session.query(User).filter((User.username == "test@example.com") | (User.email == "test@example.com")).first()
         
         if not user:
             print("❌ Test user 'testuser' not found. Please run reset_and_setup.py first.")
@@ -124,17 +124,11 @@ def main():
         # Check if data already exists
         existing_count = session.query(Transaction).filter(Transaction.user_id == user_id).count()
         if existing_count > 0:
-            print(f"⚠️  User already has {existing_count} transactions.")
-            response = input("Clear existing data and reload? (yes/no): ").lower().strip()
-            if response == 'yes':
-                # Delete existing data
-                session.query(Transaction).filter(Transaction.user_id == user_id).delete()
-                session.query(Asset).filter(Asset.user_id == user_id).delete()
-                session.commit()
-                print("✅ Cleared existing data")
-            else:
-                print("Skipping data load.")
-                return
+            # Auto-clear for non-interactive runs
+            session.query(Transaction).filter(Transaction.user_id == user_id).delete()
+            session.query(Asset).filter(Asset.user_id == user_id).delete()
+            session.commit()
+            print("✅ Cleared existing data")
         
         # Load data
         load_data_to_db(user_id)

@@ -41,6 +41,8 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
   const [formData, setFormData] = useState({});
   const [typeSelectorLinkedEMI, setTypeSelectorLinkedEMI] = useState(null);
   // Single-page layout (no tabs)
+  const [isEditing, setIsEditing] = useState(false);
+  const [editingId, setEditingId] = useState(null);
 
   // Load EMIs and data
   useEffect(() => {
@@ -131,6 +133,25 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
   const totalLiabilities = liabilities.reduce((sum, l) => sum + (l.outstanding_balance || l.principal_amount || 0), 0);
   const trueNetWorth = totalAssets - totalLiabilities;
 
+  // Deduplicate mapped assets (unique per EMI pattern_id)
+  const extractPatternId = (notes) => {
+    if (!notes) return null;
+    try {
+      const match = String(notes).match(/mapped_from_emi:([^:]+)/);
+      return match ? match[1] : null;
+    } catch {
+      return null;
+    }
+  };
+  const seenPatternIds = new Set();
+  const assetsToShow = assets.filter(a => {
+    const pid = extractPatternId(a.notes);
+    if (!pid) return true; // Only dedupe those mapped via EMI
+    if (seenPatternIds.has(pid)) return false;
+    seenPatternIds.add(pid);
+    return true;
+  });
+
   const openTypeSelector = (type, linkedEMI = null) => {
     setModalType(type);
     setSelectedCategory(null);
@@ -185,6 +206,44 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
     setShowAddModal(true);
   };
 
+  const openEditAsset = (asset) => {
+    const category = ASSET_TYPES.find(t => t.id === asset.asset_type) || ASSET_TYPES.find(t => t.id === 'other');
+    setIsEditing(true);
+    setEditingId(asset.asset_id);
+    setModalType('asset');
+    setSelectedCategory(category);
+    setFormData({
+      name: asset.name || '',
+      value: asset.current_value || asset.purchase_price || '',
+      linkedEMI: null
+    });
+    setShowAddModal(true);
+  };
+
+  const openEditLiability = (liability) => {
+    const category = LIABILITY_TYPES.find(t => t.id === (liability.liability_type || 'other')) || LIABILITY_TYPES.find(t => t.id === 'other');
+    setIsEditing(true);
+    setEditingId(liability.liability_id);
+    setModalType('liability');
+    setSelectedCategory(category);
+    setFormData({
+      name: liability.name || '',
+      outstandingBalance: liability.outstanding_balance || liability.principal_amount || '',
+      emiAmount: liability.emi_amount || '',
+      interestRate: liability.interest_rate || '',
+      rateType: liability.rate_type || 'fixed',
+      rateResetFrequency: liability.rate_reset_frequency_months || '',
+      startDate: liability.start_date ? (String(liability.start_date).slice(0,10)) : '',
+      originalTenure: liability.original_tenure_months || '',
+      moratoriumMonths: liability.moratorium_months || '',
+      processingFee: liability.processing_fee || '',
+      prepaymentPenaltyPct: liability.prepayment_penalty_pct || '',
+      lenderName: liability.lender_name || '',
+      linkedEMI: null
+    });
+    setShowAddModal(true);
+  };
+
   const handleSave = async () => {
     if (!formData.name || (modalType === 'asset' && !formData.value) || 
         (modalType === 'liability' && !formData.outstandingBalance)) {
@@ -194,9 +253,10 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
 
     try {
       if (modalType === 'asset') {
-        // Create asset
-        await fetch('http://localhost:8000/api/v1/assets/', {
-          method: 'POST',
+        const method = isEditing ? 'PATCH' : 'POST';
+        const url = isEditing ? `http://localhost:8000/api/v1/assets/${editingId}` : 'http://localhost:8000/api/v1/assets/';
+        await fetch(url, {
+          method,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -207,13 +267,15 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
             purchase_price: Number(formData.value),
             purchase_date: new Date().toISOString().slice(0, 10),
             quantity: 1,
+            recurring_pattern_id: formData.linkedEMI ? formData.linkedEMI.pattern_id : undefined,
             notes: formData.linkedEMI ? `mapped_from_emi:${formData.linkedEMI.pattern_id}:${formData.linkedEMI.name}` : undefined
           })
         });
       } else {
-        // Create liability
-        await fetch('http://localhost:8000/api/v1/liabilities/', {
-          method: 'POST',
+        const method = isEditing ? 'PATCH' : 'POST';
+        const url = isEditing ? `http://localhost:8000/api/v1/liabilities/${editingId}` : 'http://localhost:8000/api/v1/liabilities/';
+        await fetch(url, {
+          method,
           headers: {
             'Content-Type': 'application/json',
             'Authorization': `Bearer ${localStorage.getItem('token')}`
@@ -240,6 +302,8 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
 
       await loadData();
       setShowAddModal(false);
+      setIsEditing(false);
+      setEditingId(null);
     } catch (err) {
       alert('Error: ' + (err?.message || 'unknown'));
     }
@@ -390,11 +454,16 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
               + Add Asset
             </button>
           </div>
-          {assets.map(asset => (
+          {assetsToShow.map(asset => (
             <div key={asset.asset_id} className="bg-white rounded-xl p-4 shadow-sm border border-blue-100">
-              <div className="font-semibold text-gray-900">{asset.name}</div>
-              <div className="text-sm text-blue-600 font-medium mt-1">
-                {formatCurrency(asset.current_value || asset.purchase_price)}
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-semibold text-gray-900">{asset.name}</div>
+                  <div className="text-sm text-blue-600 font-medium mt-1">
+                    {formatCurrency(asset.current_value || asset.purchase_price)}
+                  </div>
+                </div>
+                <button onClick={() => openEditAsset(asset)} className="px-2 py-1 rounded-md bg-gray-100 text-gray-700 text-xs hover:bg-gray-200">Edit</button>
               </div>
             </div>
           ))}
@@ -413,13 +482,18 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
           </div>
           {liabilities.map(liability => (
             <div key={liability.liability_id} className="bg-white rounded-xl p-4 shadow-sm border border-red-100">
-              <div className="font-semibold text-gray-900">{liability.name}</div>
-              <div className="text-sm text-red-600 font-medium mt-1">
-                {formatCurrency(liability.outstanding_balance || liability.principal_amount)}
+              <div className="flex items-start justify-between">
+                <div>
+                  <div className="font-semibold text-gray-900">{liability.name}</div>
+                  <div className="text-sm text-red-600 font-medium mt-1">
+                    {formatCurrency(liability.outstanding_balance || liability.principal_amount)}
+                  </div>
+                  {liability.emi_amount && (
+                    <div className="text-xs text-gray-500 mt-1">EMI: {formatCurrency(liability.emi_amount)}</div>
+                  )}
+                </div>
+                <button onClick={() => openEditLiability(liability)} className="px-2 py-1 rounded-md bg-gray-100 text-gray-700 text-xs hover:bg-gray-200">Edit</button>
               </div>
-              {liability.emi_amount && (
-                <div className="text-xs text-gray-500 mt-1">EMI: {formatCurrency(liability.emi_amount)}</div>
-              )}
             </div>
           ))}
         </div>
@@ -629,7 +703,7 @@ export default function ModernAssetsLiabilities({ onNavigate }) {
                     onClick={handleSave}
                     className={`flex-1 py-3 rounded-xl bg-gradient-to-r ${selectedCategory.color} text-white font-semibold hover:shadow-lg`}
                   >
-                    Add
+                    {isEditing ? 'Save' : 'Add'}
                   </button>
                 </div>
               </div>

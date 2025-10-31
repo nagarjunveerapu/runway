@@ -44,6 +44,7 @@ class AccountResponse(BaseModel):
     currency: str
     is_active: bool
     created_at: str
+    account_number_ref: Optional[str] = None  # Account number reference
     
     class Config:
         from_attributes = True
@@ -66,12 +67,13 @@ async def get_accounts(
         return [AccountResponse(
             account_id=a.account_id,
             user_id=a.user_id,
-            account_name=a.account_name,
-            bank_name=a.bank_name,
-            account_type=a.account_type,
-            currency=a.currency,
-            is_active=a.is_active,
-            created_at=a.created_at.isoformat()
+            account_name=a.account_name or "Unnamed Account",  # Handle None values
+            bank_name=a.bank_name or "Unknown Bank",  # Handle None values
+            account_type=a.account_type or "savings",  # Handle None values
+            currency=a.currency or "INR",  # Handle None values
+            is_active=a.is_active if a.is_active is not None else True,
+            created_at=a.created_at.isoformat() if a.created_at else "",
+            account_number_ref=a.account_number_ref  # Include account number reference
         ) for a in accounts]
     
     except Exception as e:
@@ -98,6 +100,7 @@ async def create_account(
             account_name=account_data.account_name,
             bank_name=account_data.bank_name,
             account_type=account_data.account_type,
+            current_balance=0.0,  # Default balance to 0.0
             account_number_ref=account_data.account_number,
             currency=account_data.currency,
             is_active=True
@@ -115,7 +118,8 @@ async def create_account(
             account_type=new_account.account_type,
             currency=new_account.currency,
             is_active=new_account.is_active,
-            created_at=new_account.created_at.isoformat()
+            created_at=new_account.created_at.isoformat(),
+            account_number_ref=new_account.account_number_ref  # Include account number reference
         )
     
     except Exception as e:

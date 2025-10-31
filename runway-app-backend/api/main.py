@@ -163,7 +163,7 @@ async def health_check():
 # ============================================================================
 
 # Import route modules
-from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, fire_calculator, dashboard, emergency_fund, investment_optimizer, net_worth_timeline
+from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, fire_calculator, dashboard, emergency_fund, investment_optimizer, net_worth_timeline
 
 # Register routers
 app.include_router(
@@ -206,6 +206,12 @@ app.include_router(
     upload_categorize_v2.router,
     prefix="/api/v1/upload",
     tags=["File Upload"]
+)
+
+app.include_router(
+    upload_v2_service.router,
+    prefix="/api/v1/upload-service",
+    tags=["File Upload (Service Layer)"]
 )
 
 app.include_router(
@@ -295,6 +301,8 @@ async def startup_event():
         logger.error(f"❌ Configuration validation failed: {e}")
 
     logger.info("✅ API ready to accept requests")
+
+    # No schema guards here; use migrations instead
 
 
 @app.on_event("shutdown")
