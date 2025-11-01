@@ -116,11 +116,36 @@ class CSVParser:
             # Use the found header row
             logger.info(f"Found header row at index {header_row_idx}")
             # Set column names from header row
-            df.columns = [str(cell).strip() for cell in df.iloc[header_row_idx]]
+            # Filter out 'nan' column names (from empty cells in header row)
+            column_names = []
+            for cell in df.iloc[header_row_idx]:
+                cell_str = str(cell).strip() if pd.notna(cell) else ''
+                # Skip empty cells and 'nan' strings - use placeholder for empty columns
+                if cell_str and cell_str.lower() != 'nan':
+                    column_names.append(cell_str)
+                else:
+                    column_names.append(None)  # Mark for later removal
+            
+            # Set column names (including None for empty columns)
+            df.columns = column_names
             # Skip all rows before header (metadata rows)
             df = df.iloc[header_row_idx + 1:].reset_index(drop=True)
-        # Clean column names
-        df.columns = [str(col).strip() for col in df.columns]
+            
+            # Remove columns with None names (empty columns)
+            df = df[[col for col in df.columns if col is not None]]
+        
+        # Clean column names (handle remaining None values and 'nan' strings)
+        cleaned_cols = []
+        for i, col in enumerate(df.columns):
+            if col is None:
+                cleaned_cols.append(f'_col_{i}')
+            else:
+                col_str = str(col).strip()
+                if col_str.lower() == 'nan':
+                    cleaned_cols.append(f'_col_{i}')
+                else:
+                    cleaned_cols.append(col_str)
+        df.columns = cleaned_cols
 
         # Clean data (feature from legacy parser)
         df = df.dropna(axis=1, how='all')  # Remove empty columns
@@ -166,7 +191,7 @@ class CSVParser:
                     continue
 
                 # Extract amounts using common utility
-                # Parser's responsibility: Pass row data and column map
+                # Parser's responsibility: Pass row data, column map
                 # Amount extraction logic: In transaction_formatter
                 amount, txn_type, withdrawal, deposit = extract_amount_and_type(row, col_map)
                 if amount is None:

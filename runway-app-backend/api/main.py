@@ -163,7 +163,7 @@ async def health_check():
 # ============================================================================
 
 # Import route modules
-from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, dashboard, investment_optimizer, net_worth_timeline, credit_cards
+from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, dashboard, investment_optimizer, net_worth_timeline, credit_cards, bank_transactions, credit_card_transactions
 # DISABLED: fire_calculator, emergency_fund (commented out to remove from UI, code preserved)
 # from api.routes import fire_calculator, emergency_fund
 
@@ -288,6 +288,18 @@ app.include_router(
     credit_cards.router,
     prefix="/api/v1/credit-cards",
     tags=["Credit Cards"]
+)
+
+app.include_router(
+    bank_transactions.router,
+    prefix="/api/v1/bank-transactions",
+    tags=["Bank Transactions"]
+)
+
+app.include_router(
+    credit_card_transactions.router,
+    prefix="/api/v1/credit-card-transactions",
+    tags=["Credit Card Transactions"]
 )
 
 

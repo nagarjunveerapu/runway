@@ -21,6 +21,7 @@ from api.models.schemas import (
 from storage.database import DatabaseManager
 from storage.models import User, TransactionType
 from auth.dependencies import get_current_user
+from services.transaction_service.unified_transaction_service import UnifiedTransactionService
 from schema import CanonicalTransaction, create_transaction
 from config import Config
 
@@ -32,6 +33,11 @@ router = APIRouter()
 def get_db():
     """Get database instance"""
     return DatabaseManager(Config.DATABASE_URL)
+
+
+def get_unified_transaction_service(db: DatabaseManager = Depends(get_db)) -> UnifiedTransactionService:
+    """Get unified transaction service instance"""
+    return UnifiedTransactionService(db)
 
 
 # ============================================================================
@@ -167,9 +173,11 @@ async def get_transactions(
     start_date: Optional[str] = Query(None, description="Filter by start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="Filter by end date (YYYY-MM-DD)"),
     category: Optional[str] = Query(None, description="Filter by category"),
+    transaction_type: Optional[str] = Query('all', description="Filter by transaction type ('all', 'bank', 'credit_card')"),
     min_amount: Optional[float] = Query(None, description="Minimum amount"),
     max_amount: Optional[float] = Query(None, description="Maximum amount"),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
+    service: UnifiedTransactionService = Depends(get_unified_transaction_service)
 ):
     """
     Get paginated list of transactions with optional filters
@@ -183,14 +191,20 @@ async def get_transactions(
     - **max_amount**: Maximum transaction amount
     """
     try:
-        db = get_db()
+        # Validate transaction_type parameter
+        if transaction_type not in ['all', 'bank', 'credit_card']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="transaction_type must be 'all', 'bank', or 'credit_card'"
+            )
 
         # Calculate offset
         offset = (page - 1) * page_size
 
-        # Get transactions with filters - include user_id
-        transactions = db.get_transactions(
+        # Get transactions using unified service
+        transactions = service.get_transactions(
             user_id=current_user.user_id,
+            transaction_type=transaction_type,
             start_date=start_date,
             end_date=end_date,
             category=category,
@@ -200,47 +214,72 @@ async def get_transactions(
 
         # Filter by amount if specified
         if min_amount is not None:
-            transactions = [t for t in transactions if t.amount >= min_amount]
+            transactions = [t for t in transactions if (t.get('amount') if isinstance(t, dict) else t.amount) >= min_amount]
         if max_amount is not None:
-            transactions = [t for t in transactions if t.amount <= max_amount]
+            transactions = [t for t in transactions if (t.get('amount') if isinstance(t, dict) else t.amount) <= max_amount]
 
         # Get total count (for pagination metadata)
-        all_transactions = db.get_transactions(
+        all_transactions = service.get_transactions(
             user_id=current_user.user_id,
+            transaction_type=transaction_type,
             start_date=start_date,
             end_date=end_date,
             category=category
         )
         total = len(all_transactions)
 
-        # Convert to response models
-        transaction_responses = [
-            TransactionResponse(
-                transaction_id=t.transaction_id,
-                date=t.date,
-                amount=t.amount,
-                type=t.type,
-                description_raw=t.description_raw or "",
-                clean_description=t.clean_description,
-                merchant_raw=t.merchant_raw,
-                merchant_canonical=t.merchant_canonical,
-                merchant_id=t.merchant_id,
-                category=t.category or "Unknown",
-                confidence=t.confidence,
-                balance=t.balance,
-                currency=t.currency or "INR",
-                is_duplicate=t.is_duplicate or False,
-                duplicate_count=t.duplicate_count or 0,
-                source=t.source or "unknown",
-                bank_name=t.bank_name,
-                created_at=t.created_at.isoformat() if t.created_at else None
-            )
-            for t in transactions
-        ]
+        # Convert to response models (handle both dict and model objects)
+        transaction_responses = []
+        for t in transactions:
+            if isinstance(t, dict):
+                transaction_responses.append(
+                    TransactionResponse(
+                        transaction_id=t.get('transaction_id', ''),
+                        date=t.get('date', ''),
+                        amount=t.get('amount', 0),
+                        type=t.get('type', 'debit'),
+                        description_raw=t.get('description_raw') or "",
+                        clean_description=t.get('clean_description'),
+                        merchant_raw=t.get('merchant_raw'),
+                        merchant_canonical=t.get('merchant_canonical'),
+                        merchant_id=t.get('merchant_id'),
+                        category=t.get('category') or "Unknown",
+                        confidence=t.get('confidence'),
+                        balance=t.get('balance'),
+                        currency=t.get('currency') or "INR",
+                        is_duplicate=t.get('is_duplicate') or False,
+                        duplicate_count=t.get('duplicate_count') or 0,
+                        source=t.get('source') or "unknown",
+                        bank_name=t.get('bank_name'),
+                        created_at=t.get('created_at')
+                    )
+                )
+            else:
+                # Legacy Transaction model object
+                transaction_responses.append(
+                    TransactionResponse(
+                        transaction_id=t.transaction_id,
+                        date=t.date,
+                        amount=t.amount,
+                        type=t.type,
+                        description_raw=t.description_raw or "",
+                        clean_description=t.clean_description,
+                        merchant_raw=t.merchant_raw,
+                        merchant_canonical=t.merchant_canonical,
+                        merchant_id=t.merchant_id,
+                        category=t.category or "Unknown",
+                        confidence=t.confidence,
+                        balance=t.balance,
+                        currency=t.currency or "INR",
+                        is_duplicate=t.is_duplicate or False,
+                        duplicate_count=t.duplicate_count or 0,
+                        source=t.source or "unknown",
+                        bank_name=t.bank_name,
+                        created_at=t.created_at.isoformat() if t.created_at else None
+                    )
+                )
 
         total_pages = (total + page_size - 1) // page_size
-
-        db.close()
 
         return TransactionList(
             transactions=transaction_responses,

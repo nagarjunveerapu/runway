@@ -1,5 +1,10 @@
 """
-Transaction Repository - Data Access Layer for Transaction Operations
+Transaction Repository - Data Access Layer for Transaction Operations (DEPRECATED)
+
+DEPRECATED: This repository uses the legacy Transaction model.
+New code should use BankTransactionRepository or CreditCardTransactionRepository instead.
+
+This file is kept for backward compatibility only.
 
 Separates database operations from business logic.
 """
@@ -18,19 +23,23 @@ logger = logging.getLogger(__name__)
 
 class TransactionRepository:
     """
-    Repository pattern for transaction database operations
-    
+    DEPRECATED: Repository pattern for legacy transaction database operations
+
+    This repository uses the deprecated Transaction model.
+    New code should use BankTransactionRepository or CreditCardTransactionRepository instead.
+
     Encapsulates all database operations related to transactions.
     """
-    
+
     def __init__(self, db_manager: DatabaseManager):
         """
         Initialize repository with database manager
-        
+
         Args:
             db_manager: DatabaseManager instance
         """
         self.db_manager = db_manager
+        logger.warning("TransactionRepository is deprecated. Use BankTransactionRepository or CreditCardTransactionRepository instead.")
     
     def _get_source_value(self, source_value):
         """

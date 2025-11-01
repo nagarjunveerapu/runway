@@ -137,7 +137,8 @@ class User(Base):
 
     # Relationships
     accounts = relationship('Account', back_populates='user', cascade='all, delete-orphan')
-    transactions = relationship('Transaction', back_populates='user', cascade='all, delete-orphan')
+    bank_transactions = relationship('BankTransaction', back_populates='user', cascade='all, delete-orphan')
+    credit_card_transactions = relationship('CreditCardTransaction', back_populates='user', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<User(user_id='{self.user_id}', username='{self.username}')>"
@@ -166,7 +167,8 @@ class Account(Base):
 
     # Relationships
     user = relationship('User', back_populates='accounts')
-    transactions = relationship('Transaction', back_populates='account', cascade='all, delete-orphan')
+    bank_transactions = relationship('BankTransaction', back_populates='account', cascade='all, delete-orphan')
+    credit_card_transactions = relationship('CreditCardTransaction', back_populates='account', cascade='all, delete-orphan')
     credit_card_statements = relationship('CreditCardStatement', back_populates='account', cascade='all, delete-orphan')
 
     def __repr__(self):
@@ -189,144 +191,11 @@ class Merchant(Base):
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
     # Relationships
-    transactions = relationship('Transaction', back_populates='merchant')
+    bank_transactions = relationship('BankTransaction', back_populates='merchant')
+    credit_card_transactions = relationship('CreditCardTransaction', back_populates='merchant')
 
     def __repr__(self):
         return f"<Merchant(merchant_id='{self.merchant_id}', name='{self.merchant_canonical}')>"
-
-
-class Transaction(Base):
-    """Transaction model (canonical schema)"""
-    __tablename__ = 'transactions'
-
-    # Primary key
-    transaction_id = Column(String(36), primary_key=True)
-
-    # Foreign keys
-    user_id = Column(String(36), ForeignKey('users.user_id'), nullable=False, index=True)
-    account_id = Column(String(36), ForeignKey('accounts.account_id'))
-    merchant_id = Column(String(64), ForeignKey('merchants.merchant_id'))
-
-    # Core transaction fields
-    date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
-    timestamp = Column(DateTime)  # Full timestamp if available
-    amount = Column(Float, nullable=False)
-    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
-    type = Column(
-        _get_enum_column_type(TransactionType, 'transaction_type'),
-        nullable=False,
-        default=TransactionType.DEBIT
-    )
-
-    # Description
-    description_raw = Column(Text)
-    clean_description = Column(Text)
-
-    # Merchant (denormalized for performance)
-    merchant_raw = Column(String(255))
-    merchant_canonical = Column(String(255), index=True)
-
-    # Categorization
-    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
-    category = Column(
-        _get_enum_column_type(TransactionCategory, 'transaction_category'),
-        default=TransactionCategory.UNKNOWN,
-        index=True
-    )
-    transaction_sub_type = Column(String(100))  # Sub-type classification (e.g., "EMI/Loan", "Credit Card Payment")
-    labels = Column(JSON)  # Multi-label support
-    confidence = Column(Float)  # ML prediction confidence
-
-    # Balance
-    balance = Column(Float)
-
-    # Multi-currency
-    currency = Column(String(10), default='INR')
-    original_amount = Column(Float)
-    original_currency = Column(String(10))
-
-    # Deduplication
-    duplicate_of = Column(String(36), index=True)
-    duplicate_count = Column(Integer, default=0)
-    is_duplicate = Column(Boolean, default=False)
-
-    # Source tracking
-    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
-    source = Column(
-        _get_enum_column_type(TransactionSource, 'transaction_source'),
-        nullable=True
-    )
-    bank_name = Column(String(100))
-    statement_period = Column(String(50))
-
-    # Metadata
-    ingestion_timestamp = Column(DateTime, default=datetime.now)
-    extra_metadata = Column(JSON)  # Additional flexible metadata (renamed to avoid conflict)
-    
-    # FIRE integration fields
-    linked_asset_id = Column(String(36), index=True)  # Reference to Asset
-    liquidation_event_id = Column(String(36), index=True)  # Reference to Liquidation event
-    month = Column(String(7), index=True)
-    
-    # Recurring pattern detection
-    is_recurring = Column(Boolean, default=False, index=True)  # Recurring transaction?
-    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
-    recurring_type = Column(
-        _get_enum_column_type(RecurringType, 'recurring_type'),
-        nullable=True
-    )
-    recurring_group_id = Column(String(36), index=True)  # Groups similar recurring transactions  # YYYY-MM format for monthly aggregation
-
-    # Timestamps
-    created_at = Column(DateTime, default=datetime.now)
-    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
-
-    # Relationships
-    user = relationship('User', back_populates='transactions')
-    account = relationship('Account', back_populates='transactions')
-    merchant = relationship('Merchant', back_populates='transactions')
-
-    def __repr__(self):
-        return (f"<Transaction(id='{self.transaction_id[:8]}...', "
-                f"date='{self.date}', amount={self.amount}, "
-                f"type='{self.type}', merchant='{self.merchant_canonical}')>")
-
-    def to_dict(self):
-        """Convert to dictionary"""
-        return {
-            'transaction_id': self.transaction_id,
-            'user_id': self.user_id,
-            'account_id': self.account_id,
-            'date': self.date,
-            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
-            'amount': self.amount,
-            'type': self.type,
-            'description_raw': self.description_raw,
-            'clean_description': self.clean_description,
-            'merchant_raw': self.merchant_raw,
-            'merchant_canonical': self.merchant_canonical,
-            'merchant_id': self.merchant_id,
-            'category': self.category,
-            'labels': self.labels,
-            'confidence': self.confidence,
-            'balance': self.balance,
-            'currency': self.currency,
-            'original_amount': self.original_amount,
-            'original_currency': self.original_currency,
-            'duplicate_of': self.duplicate_of,
-            'duplicate_count': self.duplicate_count,
-            'is_duplicate': self.is_duplicate,
-            'source': self.source,
-            'bank_name': self.bank_name,
-            'statement_period': self.statement_period,
-            'ingestion_timestamp': self.ingestion_timestamp.isoformat() if self.ingestion_timestamp else None,
-            'extra_metadata': self.extra_metadata,
-            'linked_asset_id': self.linked_asset_id,
-            'liquidation_event_id': self.liquidation_event_id,
-            'month': self.month,
-            'created_at': self.created_at.isoformat() if self.created_at else None,
-            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
-        }
 
 
 class Asset(Base):
@@ -612,6 +481,299 @@ class Liability(Base):
         }
 
 
+class BankTransaction(Base):
+    """Bank transaction model (savings, current, checking accounts)"""
+    __tablename__ = 'bank_transactions'
+
+    # Primary key
+    transaction_id = Column(String(36), primary_key=True)
+
+    # Foreign keys
+    user_id = Column(String(36), ForeignKey('users.user_id'), nullable=False, index=True)
+    account_id = Column(String(36), ForeignKey('accounts.account_id'), index=True)
+    merchant_id = Column(String(64), ForeignKey('merchants.merchant_id'))
+
+    # Core transaction fields
+    date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
+    timestamp = Column(DateTime)  # Full timestamp if available
+    amount = Column(Float, nullable=False)
+    type = Column(
+        _get_enum_column_type(TransactionType, 'transaction_type'),
+        nullable=False,
+        default=TransactionType.DEBIT,
+        index=True
+    )
+
+    # Description
+    description_raw = Column(Text)
+    clean_description = Column(Text)
+
+    # Merchant (denormalized for performance)
+    merchant_raw = Column(String(255))
+    merchant_canonical = Column(String(255), index=True)
+
+    # Categorization
+    category = Column(
+        _get_enum_column_type(TransactionCategory, 'transaction_category'),
+        default=TransactionCategory.UNKNOWN,
+        index=True
+    )
+    transaction_sub_type = Column(String(100))  # Sub-type classification (e.g., "EMI/Loan", "NEFT Transfer")
+    labels = Column(JSON)  # Multi-label support
+    confidence = Column(Float)  # ML prediction confidence
+
+    # Bank-specific fields
+    balance = Column(Float)  # Account balance after this transaction
+    transaction_reference = Column(String(100))  # Transaction reference number (UTR, NEFT ref, etc.)
+    cheque_number = Column(String(50))  # Cheque number if applicable
+    branch_code = Column(String(50))  # Branch code for the transaction
+    ifsc_code = Column(String(11))  # IFSC code for transfers
+
+    # Multi-currency
+    currency = Column(String(10), default='INR')
+    original_amount = Column(Float)
+    original_currency = Column(String(10))
+
+    # Deduplication
+    duplicate_of = Column(String(36), index=True)
+    duplicate_count = Column(Integer, default=0)
+    is_duplicate = Column(Boolean, default=False)
+
+    # Source tracking
+    source = Column(
+        _get_enum_column_type(TransactionSource, 'transaction_source'),
+        nullable=True
+    )
+    bank_name = Column(String(100))
+    statement_period = Column(String(50))
+
+    # Metadata
+    ingestion_timestamp = Column(DateTime, default=datetime.now)
+    extra_metadata = Column(JSON)  # Additional flexible metadata
+    
+    # FIRE integration fields
+    linked_asset_id = Column(String(36), index=True)  # Reference to Asset
+    liquidation_event_id = Column(String(36), index=True)  # Reference to Liquidation event
+    month = Column(String(7), index=True)  # YYYY-MM format
+    
+    # Recurring pattern detection
+    is_recurring = Column(Boolean, default=False, index=True)
+    recurring_type = Column(
+        _get_enum_column_type(RecurringType, 'recurring_type'),
+        nullable=True
+    )
+    recurring_group_id = Column(String(36), index=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # Relationships
+    user = relationship('User', back_populates='bank_transactions')
+    account = relationship('Account', back_populates='bank_transactions')
+    merchant = relationship('Merchant', back_populates='bank_transactions')
+
+    def __repr__(self):
+        return (f"<BankTransaction(id='{self.transaction_id[:8]}...', "
+                f"date='{self.date}', amount={self.amount}, "
+                f"type='{self.type}', merchant='{self.merchant_canonical}')>")
+
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            'transaction_id': self.transaction_id,
+            'user_id': self.user_id,
+            'account_id': self.account_id,
+            'date': self.date,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'amount': self.amount,
+            'type': self.type.value if hasattr(self.type, 'value') else str(self.type),
+            'description_raw': self.description_raw,
+            'clean_description': self.clean_description,
+            'merchant_raw': self.merchant_raw,
+            'merchant_canonical': self.merchant_canonical,
+            'merchant_id': self.merchant_id,
+            'category': self.category.value if hasattr(self.category, 'value') else str(self.category) if self.category else None,
+            'transaction_sub_type': self.transaction_sub_type,
+            'labels': self.labels,
+            'confidence': self.confidence,
+            'balance': self.balance,
+            'transaction_reference': self.transaction_reference,
+            'cheque_number': self.cheque_number,
+            'branch_code': self.branch_code,
+            'ifsc_code': self.ifsc_code,
+            'currency': self.currency,
+            'original_amount': self.original_amount,
+            'original_currency': self.original_currency,
+            'duplicate_of': self.duplicate_of,
+            'duplicate_count': self.duplicate_count,
+            'is_duplicate': self.is_duplicate,
+            'source': self.source.value if hasattr(self.source, 'value') else str(self.source) if self.source else None,
+            'bank_name': self.bank_name,
+            'statement_period': self.statement_period,
+            'ingestion_timestamp': self.ingestion_timestamp.isoformat() if self.ingestion_timestamp else None,
+            'extra_metadata': self.extra_metadata,
+            'linked_asset_id': self.linked_asset_id,
+            'liquidation_event_id': self.liquidation_event_id,
+            'month': self.month,
+            'is_recurring': self.is_recurring,
+            'recurring_type': self.recurring_type.value if hasattr(self.recurring_type, 'value') else str(self.recurring_type) if self.recurring_type else None,
+            'recurring_group_id': self.recurring_group_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
+class CreditCardTransaction(Base):
+    """Credit card transaction model"""
+    __tablename__ = 'credit_card_transactions'
+
+    # Primary key
+    transaction_id = Column(String(36), primary_key=True)
+
+    # Foreign keys
+    user_id = Column(String(36), ForeignKey('users.user_id'), nullable=False, index=True)
+    account_id = Column(String(36), ForeignKey('accounts.account_id'), index=True)
+    merchant_id = Column(String(64), ForeignKey('merchants.merchant_id'))
+    statement_id = Column(String(36), ForeignKey('credit_card_statements.statement_id'), index=True)
+
+    # Core transaction fields
+    date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD (transaction date)
+    timestamp = Column(DateTime)  # Full timestamp if available
+    amount = Column(Float, nullable=False)
+    type = Column(
+        _get_enum_column_type(TransactionType, 'transaction_type'),
+        nullable=False,
+        default=TransactionType.DEBIT,
+        index=True
+    )
+
+    # Description
+    description_raw = Column(Text)
+    clean_description = Column(Text)
+
+    # Merchant (denormalized for performance)
+    merchant_raw = Column(String(255))
+    merchant_canonical = Column(String(255), index=True)
+
+    # Categorization
+    category = Column(
+        _get_enum_column_type(TransactionCategory, 'transaction_category'),
+        default=TransactionCategory.UNKNOWN,
+        index=True
+    )
+    transaction_sub_type = Column(String(100))  # Sub-type classification (e.g., "Online Purchase", "Cash Advance")
+    labels = Column(JSON)  # Multi-label support
+    confidence = Column(Float)  # ML prediction confidence
+
+    # Credit card-specific fields
+    billing_cycle = Column(String(50))  # Billing cycle (e.g., "Jan 2024")
+    transaction_date = Column(String(10))  # Transaction date (may differ from statement date)
+    posting_date = Column(String(10))  # Posting date
+    due_date = Column(String(10))  # Due date for payment
+    reward_points = Column(Float)  # Reward points earned/lost
+    transaction_fee = Column(Float)  # Transaction fee charged
+    foreign_transaction_fee = Column(Float)  # Foreign transaction fee if applicable
+    currency_conversion_rate = Column(Float)  # Exchange rate if foreign transaction
+
+    # Multi-currency
+    currency = Column(String(10), default='INR')
+    original_amount = Column(Float)  # Original amount in foreign currency
+    original_currency = Column(String(10))
+
+    # Deduplication
+    duplicate_of = Column(String(36), index=True)
+    duplicate_count = Column(Integer, default=0)
+    is_duplicate = Column(Boolean, default=False)
+
+    # Source tracking
+    source = Column(
+        _get_enum_column_type(TransactionSource, 'transaction_source'),
+        nullable=True
+    )
+    bank_name = Column(String(100))
+
+    # Metadata
+    ingestion_timestamp = Column(DateTime, default=datetime.now)
+    extra_metadata = Column(JSON)  # Additional flexible metadata
+    
+    # FIRE integration fields
+    linked_asset_id = Column(String(36), index=True)  # Reference to Asset
+    liquidation_event_id = Column(String(36), index=True)  # Reference to Liquidation event
+    month = Column(String(7), index=True)  # YYYY-MM format
+    
+    # Recurring pattern detection
+    is_recurring = Column(Boolean, default=False, index=True)
+    recurring_type = Column(
+        _get_enum_column_type(RecurringType, 'recurring_type'),
+        nullable=True
+    )
+    recurring_group_id = Column(String(36), index=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.now)
+    updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # Relationships
+    user = relationship('User', back_populates='credit_card_transactions')
+    account = relationship('Account', back_populates='credit_card_transactions')
+    merchant = relationship('Merchant', back_populates='credit_card_transactions')
+    statement = relationship('CreditCardStatement', back_populates='transactions')
+
+    def __repr__(self):
+        return (f"<CreditCardTransaction(id='{self.transaction_id[:8]}...', "
+                f"date='{self.date}', amount={self.amount}, "
+                f"type='{self.type}', merchant='{self.merchant_canonical}')>")
+
+    def to_dict(self):
+        """Convert to dictionary"""
+        return {
+            'transaction_id': self.transaction_id,
+            'user_id': self.user_id,
+            'account_id': self.account_id,
+            'statement_id': self.statement_id,
+            'date': self.date,
+            'timestamp': self.timestamp.isoformat() if self.timestamp else None,
+            'amount': self.amount,
+            'type': self.type.value if hasattr(self.type, 'value') else str(self.type),
+            'description_raw': self.description_raw,
+            'clean_description': self.clean_description,
+            'merchant_raw': self.merchant_raw,
+            'merchant_canonical': self.merchant_canonical,
+            'merchant_id': self.merchant_id,
+            'category': self.category.value if hasattr(self.category, 'value') else str(self.category) if self.category else None,
+            'transaction_sub_type': self.transaction_sub_type,
+            'labels': self.labels,
+            'confidence': self.confidence,
+            'billing_cycle': self.billing_cycle,
+            'transaction_date': self.transaction_date,
+            'posting_date': self.posting_date,
+            'due_date': self.due_date,
+            'reward_points': self.reward_points,
+            'transaction_fee': self.transaction_fee,
+            'foreign_transaction_fee': self.foreign_transaction_fee,
+            'currency_conversion_rate': self.currency_conversion_rate,
+            'currency': self.currency,
+            'original_amount': self.original_amount,
+            'original_currency': self.original_currency,
+            'duplicate_of': self.duplicate_of,
+            'duplicate_count': self.duplicate_count,
+            'is_duplicate': self.is_duplicate,
+            'source': self.source.value if hasattr(self.source, 'value') else str(self.source) if self.source else None,
+            'bank_name': self.bank_name,
+            'ingestion_timestamp': self.ingestion_timestamp.isoformat() if self.ingestion_timestamp else None,
+            'extra_metadata': self.extra_metadata,
+            'linked_asset_id': self.linked_asset_id,
+            'liquidation_event_id': self.liquidation_event_id,
+            'month': self.month,
+            'is_recurring': self.is_recurring,
+            'recurring_type': self.recurring_type.value if hasattr(self.recurring_type, 'value') else str(self.recurring_type) if self.recurring_type else None,
+            'recurring_group_id': self.recurring_group_id,
+            'created_at': self.created_at.isoformat() if self.created_at else None,
+            'updated_at': self.updated_at.isoformat() if self.updated_at else None,
+        }
+
+
 class CreditCardStatement(Base):
     """Credit Card Statement metadata tracking"""
     __tablename__ = 'credit_card_statements'
@@ -650,9 +812,10 @@ class CreditCardStatement(Base):
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
 
-    # Relationship
+    # Relationships
     user = relationship('User', back_populates='credit_card_statements')
     account = relationship('Account', back_populates='credit_card_statements')
+    transactions = relationship('CreditCardTransaction', back_populates='statement', cascade='all, delete-orphan')
 
     def __repr__(self):
         return f"<CreditCardStatement(statement_id='{self.statement_id}', bank='{self.bank_name}', period='{self.billing_period}')>"
@@ -740,11 +903,26 @@ User.net_worth_snapshots = relationship('NetWorthSnapshot', back_populates='user
 from sqlalchemy import Index, UniqueConstraint
 
 # Composite indexes for common queries
-Index('idx_user_date', Transaction.user_id, Transaction.date)
-Index('idx_user_category', Transaction.user_id, Transaction.category)
-Index('idx_date_category', Transaction.date, Transaction.category)
-Index('idx_merchant_date', Transaction.merchant_canonical, Transaction.date)
-Index('idx_user_month', Transaction.user_id, Transaction.month)
+
+# BankTransaction table indexes
+Index('idx_bank_txn_user_date', BankTransaction.user_id, BankTransaction.date)
+Index('idx_bank_txn_user_category', BankTransaction.user_id, BankTransaction.category)
+Index('idx_bank_txn_account_date', BankTransaction.account_id, BankTransaction.date)
+Index('idx_bank_txn_merchant_date', BankTransaction.merchant_canonical, BankTransaction.date)
+Index('idx_bank_txn_user_month', BankTransaction.user_id, BankTransaction.month)
+Index('idx_bank_txn_type', BankTransaction.type)
+
+# CreditCardTransaction table indexes
+Index('idx_cc_txn_user_date', CreditCardTransaction.user_id, CreditCardTransaction.date)
+Index('idx_cc_txn_user_category', CreditCardTransaction.user_id, CreditCardTransaction.category)
+Index('idx_cc_txn_account_date', CreditCardTransaction.account_id, CreditCardTransaction.date)
+Index('idx_cc_txn_statement', CreditCardTransaction.statement_id, CreditCardTransaction.date)
+Index('idx_cc_txn_billing_cycle', CreditCardTransaction.account_id, CreditCardTransaction.billing_cycle)
+Index('idx_cc_txn_merchant_date', CreditCardTransaction.merchant_canonical, CreditCardTransaction.date)
+Index('idx_cc_txn_user_month', CreditCardTransaction.user_id, CreditCardTransaction.month)
+Index('idx_cc_txn_type', CreditCardTransaction.type)
+
+# Other indexes
 Index('idx_asset_user', Asset.user_id)
 Index('idx_asset_recurring_pattern', Asset.recurring_pattern_id)
 Index('idx_liquidation_user', Liquidation.user_id, Liquidation.asset_id)

@@ -294,7 +294,9 @@ async def get_dashboard_summary(current_user: User = Depends(get_current_user)):
                 else:  # debit
                     current_expenses += txn.amount
                     # Detect EMI payments
-                    if txn.category and any(keyword in txn.category.lower() for keyword in ['emi', 'loan', 'mortgage']):
+                    # Handle category as ENUM or string
+                    category_str = txn.category.value if hasattr(txn.category, 'value') else str(txn.category) if txn.category else ''
+                    if category_str and any(keyword in category_str.lower() for keyword in ['emi', 'loan', 'mortgage']):
                         current_emi += txn.amount
 
         current_net_savings = current_income - current_expenses
@@ -326,7 +328,9 @@ async def get_dashboard_summary(current_user: User = Depends(get_current_user)):
                     prev_income += txn.amount
                 else:
                     prev_expenses += txn.amount
-                    if txn.category and any(keyword in txn.category.lower() for keyword in ['emi', 'loan', 'mortgage']):
+                    # Handle category as ENUM or string
+                    category_str = txn.category.value if hasattr(txn.category, 'value') else str(txn.category) if txn.category else ''
+                    if category_str and any(keyword in category_str.lower() for keyword in ['emi', 'loan', 'mortgage']):
                         prev_emi += txn.amount
 
         prev_net_savings = prev_income - prev_expenses

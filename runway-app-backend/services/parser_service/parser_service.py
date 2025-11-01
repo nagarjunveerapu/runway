@@ -20,9 +20,11 @@ from typing import Tuple, Optional, Dict
 from fastapi import UploadFile
 
 from services.parser_service.parser_factory import ParserFactory
-from services.parser_service.transaction_repository import TransactionRepository
+from services.parser_service.transaction_repository import TransactionRepository  # DEPRECATED - kept for backward compatibility
 from services.parser_service.transaction_enrichment_service import TransactionEnrichmentService
 from services.credit_card_service import CreditCardService
+from services.bank_transaction_service.bank_transaction_repository import BankTransactionRepository
+from services.credit_card_transaction_service.credit_card_transaction_repository import CreditCardTransactionRepository
 from storage.database import DatabaseManager
 from storage.models import Account
 import uuid
@@ -49,7 +51,9 @@ class ParserService:
             db_manager: DatabaseManager instance for database operations
         """
         self.db_manager = db_manager
-        self.transaction_repository = TransactionRepository(db_manager)
+        self.transaction_repository = TransactionRepository(db_manager)  # DEPRECATED - kept for backward compatibility
+        self.bank_transaction_repository = BankTransactionRepository(db_manager)
+        self.credit_card_transaction_repository = CreditCardTransactionRepository(db_manager)
         self.enrichment_service = TransactionEnrichmentService()
         self.credit_card_service = CreditCardService(db_manager)
     
@@ -229,23 +233,108 @@ class ParserService:
                 txn['source'] = source
             
             # Enrich transactions (merchant normalization, categorization)
-            # NOTE: We don't run deduplication here - the database unique constraint handles it
-            # Deduplication logic is only used for EMI/SIP pattern detection, not for duplicates
+            # NOTE: Duplicate detection is NOT done within the same file - bank statements don't have duplicates
+            # Duplicate detection only happens at database level via unique constraint when:
+            # - Same CSV is uploaded again
+            # - Another CSV with overlapping transactions is uploaded
             # Use enrich_and_deduplicate to get EMI conversion detection
-            enriched_transactions, dedup_stats = self.enrichment_service.enrich_and_deduplicate(transactions)
+            enriched_transactions, dedup_stats = self.enrichment_service.enrich_and_deduplicate(transactions, check_against_database=False)
             emi_converted_count = dedup_stats.get('emi_converted_count', 0)
             logger.info(f"✅ Enriched {len(enriched_transactions)} transactions (EMI conversions: {emi_converted_count})")
             
             # Step 6: Persist to database
             logger.info("\n[STEP 6] 💾 TRANSACTION REPOSITORY: Persisting to database...")
-            inserted_count = self.transaction_repository.insert_transactions_batch(
-                transactions=enriched_transactions,
-                user_id=user_id,
-                account_id=account_id,
-                batch_size=100
-            )
             
-            logger.info(f"✅ Successfully imported {inserted_count}/{len(enriched_transactions)} transactions")
+            # Determine account type to route to appropriate repository
+            account_type = None
+            if account_id:
+                session = self.db_manager.get_session()
+                try:
+                    account = session.query(Account).filter(
+                        Account.account_id == account_id
+                    ).first()
+                    if account and account.account_type:
+                        account_type = account.account_type.lower()
+                finally:
+                    session.close()
+            
+            # Route to appropriate repository based on account type
+            if account_type in ['credit_card', 'credit']:
+                logger.info(f"💳 Routing to CreditCardTransactionRepository (account_type: {account_type})")
+                # Use credit card repository
+                session = self.db_manager.get_session()
+                try:
+                    inserted_count = 0
+                    statement_id = None
+                    if metadata.get('statement_id'):
+                        statement_id = metadata.get('statement_id')
+                    
+                    for txn_dict in enriched_transactions:
+                        try:
+                            self.credit_card_transaction_repository.create_transaction(
+                                txn_dict,
+                                user_id,
+                                account_id,
+                                statement_id,
+                                session=session
+                            )
+                            inserted_count += 1
+                            if inserted_count % 100 == 0:
+                                session.commit()
+                                logger.info(f"   Progress: {inserted_count}/{len(enriched_transactions)} transactions inserted...")
+                        except Exception as e:
+                            # Handle duplicates and other errors
+                            error_msg = str(e)
+                            if "UNIQUE constraint" in error_msg or "duplicate" in error_msg.lower():
+                                logger.debug(f"   Duplicate transaction skipped: {txn_dict.get('date')} - {txn_dict.get('description_raw', '')[:50]}")
+                            else:
+                                logger.warning(f"   Error inserting transaction: {e}")
+                            session.rollback()
+                    
+                    session.commit()
+                    logger.info(f"✅ Successfully imported {inserted_count}/{len(enriched_transactions)} credit card transactions")
+                except Exception as e:
+                    session.rollback()
+                    logger.error(f"❌ Error inserting credit card transactions: {e}")
+                    raise
+                finally:
+                    session.close()
+            else:
+                # Use bank repository (default)
+                logger.info(f"🏦 Routing to BankTransactionRepository (account_type: {account_type or 'default'})")
+                session = self.db_manager.get_session()
+                try:
+                    inserted_count = 0
+                    duplicate_count = 0
+                    for txn_dict in enriched_transactions:
+                        try:
+                            self.bank_transaction_repository.create_transaction(
+                                txn_dict,
+                                user_id,
+                                account_id,
+                                session=session
+                            )
+                            session.commit()  # Commit each transaction individually
+                            inserted_count += 1
+                            if inserted_count % 100 == 0:
+                                logger.info(f"   Progress: {inserted_count}/{len(enriched_transactions)} transactions inserted...")
+                        except Exception as e:
+                            # Handle duplicates and other errors - rollback only this transaction
+                            session.rollback()
+                            error_msg = str(e)
+                            if "UNIQUE constraint" in error_msg or "duplicate" in error_msg.lower() or "UniqueViolation" in error_msg:
+                                duplicate_count += 1
+                                logger.debug(f"   Duplicate transaction skipped: {txn_dict.get('date')} - {txn_dict.get('description_raw', '')[:50]}")
+                            else:
+                                logger.warning(f"   Error inserting transaction: {e}")
+                    
+                    logger.info(f"✅ Successfully imported {inserted_count}/{len(enriched_transactions)} bank transactions ({duplicate_count} duplicates skipped)")
+                except Exception as e:
+                    session.rollback()
+                    logger.error(f"❌ Error inserting bank transactions: {e}")
+                    raise
+                finally:
+                    session.close()
             
             # Create credit card statement record if this is a credit card statement
             if metadata.get('account_type') == 'credit_card' and account_id:
@@ -269,6 +358,8 @@ class ParserService:
             logger.info("✅ PARSER SERVICE: File processing completed successfully!")
             logger.info("=" * 80)
             
+            # Duplicates found = transactions skipped due to unique constraint violations
+            # This happens when the same CSV is uploaded again or another CSV has overlapping transactions
             duplicates_found = len(enriched_transactions) - inserted_count
             
             result = {

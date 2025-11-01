@@ -122,12 +122,14 @@ class TransactionEnrichmentService:
         
         return clean_transactions, duplicate_stats
     
-    def enrich_and_deduplicate(self, transactions: List[Dict]) -> tuple[List[Dict], Dict]:
+    def enrich_and_deduplicate(self, transactions: List[Dict], check_against_database: bool = False, existing_transactions: List[Dict] = None) -> tuple[List[Dict], Dict]:
         """
-        Complete enrichment pipeline: enrich + deduplicate
+        Complete enrichment pipeline: enrich + detect duplicates against database only
         
         Args:
             transactions: List of raw transaction dictionaries
+            check_against_database: If True, check for duplicates against existing database records (not within same file)
+            existing_transactions: Optional list of existing transactions from database to check against
             
         Returns:
             Tuple of (enriched_transactions, duplicate_stats)
@@ -146,13 +148,70 @@ class TransactionEnrichmentService:
         emi_converted_count = sum(1 for t in enriched_with_emi if t.get('extra_metadata', {}).get('emi_converted'))
         logger.info(f"✨ ENRICHMENT SERVICE: ✅ EMI conversion detection complete. Found {emi_converted_count} EMI conversions")
         
-        # Step 3: Deduplicate
-        logger.info("✨ ENRICHMENT SERVICE: Step 3 - Detecting and handling duplicates...")
-        cleaned, stats = self.detect_and_handle_duplicates(enriched_with_emi)
-        logger.info(f"✨ ENRICHMENT SERVICE: ✅ Deduplication complete. Duplicates found: {stats.get('merged_count', 0)}")
+        # Step 3: Skip within-batch deduplication - database unique constraint handles duplicates
+        # Only check against existing database records if requested
+        cleaned = enriched_with_emi
+        stats = {'merged_count': 0, 'skipped_count': 0}
+        
+        if check_against_database and existing_transactions:
+            logger.info("✨ ENRICHMENT SERVICE: Step 3 - Checking for duplicates against existing database records...")
+            # Check only against existing database records, not within the same batch
+            cleaned = []
+            skipped_count = 0
+            for txn in enriched_with_emi:
+                is_duplicate = False
+                for existing_txn in existing_transactions:
+                    if self._matches_existing_transaction(txn, existing_txn):
+                        is_duplicate = True
+                        skipped_count += 1
+                        logger.debug(f"   Duplicate transaction (against DB): {txn.get('date')} - {txn.get('description_raw', '')[:50]}")
+                        break
+                if not is_duplicate:
+                    cleaned.append(txn)
+            stats['skipped_count'] = skipped_count
+            logger.info(f"✨ ENRICHMENT SERVICE: ✅ Duplicate check complete. Skipped {skipped_count} duplicates against database")
+        else:
+            logger.info("✨ ENRICHMENT SERVICE: Step 3 - Skipping within-batch duplicate detection (database unique constraint will handle duplicates on insert)")
         
         # Add EMI conversion count to stats
         stats['emi_converted_count'] = emi_converted_count
         
         return cleaned, stats
+    
+    def _matches_existing_transaction(self, new_txn: Dict, existing_txn: Dict) -> bool:
+        """
+        Check if a new transaction matches an existing transaction
+        
+        Matches if: date, amount, description_raw, account_id, and balance all match
+        
+        Args:
+            new_txn: New transaction dictionary
+            existing_txn: Existing transaction dictionary (from database or previous batch)
+            
+        Returns:
+            True if transactions match (duplicate), False otherwise
+        """
+        # Match criteria (same as database unique constraint):
+        # - date
+        # - amount
+        # - description_raw
+        # - account_id
+        # - balance
+        
+        if (new_txn.get('date') != existing_txn.get('date') or
+            abs(float(new_txn.get('amount', 0) or 0) - float(existing_txn.get('amount', 0) or 0)) > 0.01 or
+            new_txn.get('description_raw') != existing_txn.get('description_raw') or
+            new_txn.get('account_id') != existing_txn.get('account_id')):
+            return False
+        
+        # Balance comparison (handle None)
+        new_balance = new_txn.get('balance')
+        existing_balance = existing_txn.get('balance')
+        
+        if new_balance is None and existing_balance is None:
+            return True
+        if new_balance is None or existing_balance is None:
+            return False
+        
+        return abs(float(new_balance) - float(existing_balance)) < 0.01
 

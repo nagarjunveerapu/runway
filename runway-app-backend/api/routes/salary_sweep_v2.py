@@ -22,7 +22,7 @@ from datetime import datetime, timedelta
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import User, Transaction, SalarySweepConfig, DetectedEMIPattern, Asset, Liability
+from storage.models import User, Transaction, SalarySweepConfig, DetectedEMIPattern, Asset, Liability, BankTransaction, CreditCardTransaction
 from auth.dependencies import get_current_user, get_db
 from config import Config
 from ml.categorizer import MLCategorizer
@@ -699,10 +699,68 @@ async def detect_or_refresh_patterns(
             SalarySweepConfig.is_active == True
         ).first()
 
-        # Get all user transactions
-        all_transactions = db.get_transactions(user_id=current_user.user_id)
-        logger.info(f"📊 DEBUG: Retrieved {len(all_transactions)} transactions for user {current_user.user_id}")
-        logger.info(f"📊 DEBUG: User email: {current_user.username}")
+        # Get transactions from BOTH bank and credit card
+        # - For SALARY detection: use only bank transactions
+        # - For EMI/Loan detection: use BOTH bank AND credit card transactions (important for credit card EMIs!)
+        bank_transactions = session.query(BankTransaction).filter(
+            BankTransaction.user_id == current_user.user_id
+        ).all()
+
+        cc_transactions = session.query(CreditCardTransaction).filter(
+            CreditCardTransaction.user_id == current_user.user_id
+        ).all()
+
+        # Convert to Transaction-like objects for compatibility with existing detection logic
+        all_transactions = []  # Combined: bank + credit card (for EMI detection)
+        bank_only_transactions = []  # Bank only (for salary detection)
+
+        # Add bank transactions
+        for bt in bank_transactions:
+            txn_type = bt.type.value if hasattr(bt.type, 'value') else str(bt.type)
+            if isinstance(txn_type, str):
+                txn_type = txn_type.lower()
+            else:
+                txn_type = 'debit' if 'debit' in str(txn_type).lower() else 'credit'
+
+            adapter = type('Transaction', (), {
+                'transaction_id': bt.transaction_id,
+                'user_id': bt.user_id,
+                'account_id': bt.account_id,
+                'date': bt.date,
+                'amount': bt.amount,
+                'type': txn_type,
+                'description_raw': bt.description_raw,
+                'merchant_canonical': bt.merchant_canonical,
+                'category': bt.category.value if hasattr(bt.category, 'value') else str(bt.category),
+                'balance': bt.balance
+            })()
+            all_transactions.append(adapter)
+            bank_only_transactions.append(adapter)  # Also add to bank-only list
+
+        # Add credit card transactions (for EMI detection)
+        for ct in cc_transactions:
+            txn_type = ct.type.value if hasattr(ct.type, 'value') else str(ct.type)
+            if isinstance(txn_type, str):
+                txn_type = txn_type.lower()
+            else:
+                txn_type = 'debit' if 'debit' in str(txn_type).lower() else 'credit'
+
+            adapter = type('Transaction', (), {
+                'transaction_id': ct.transaction_id,
+                'user_id': ct.user_id,
+                'account_id': ct.account_id,
+                'date': ct.date,
+                'amount': ct.amount,
+                'type': txn_type,
+                'description_raw': ct.description_raw,
+                'merchant_canonical': ct.merchant_canonical,
+                'category': ct.category.value if hasattr(ct.category, 'value') else str(ct.category),
+                'balance': getattr(ct, 'balance', None)
+            })()
+            all_transactions.append(adapter)
+
+        logger.info(f"📊 DEBUG: Retrieved {len(bank_transactions)} bank + {len(cc_transactions)} credit card transactions for user {current_user.user_id}")
+        logger.info(f"📊 DEBUG: Converted {len(all_transactions)} transactions to adapter objects")
 
         if existing_config:
             # USER HAS EXISTING CONFIG - Re-detect ALL patterns (saved + new)
@@ -716,9 +774,11 @@ async def detect_or_refresh_patterns(
 
             # Detect ALL patterns (same logic as new detection)
             logger.info("Detecting all recurring financial obligations...")
+            logger.info(f"📊 DEBUG: About to filter {len(all_transactions)} transactions for financial obligations...")
 
             # Apply comprehensive filtering (shared helper)
             financial_transactions = _filter_financial_transactions(all_transactions, min_amount=100)
+            logger.info(f"📊 DEBUG: Filtered to {len(financial_transactions)} financial obligation transactions")
 
             # Group by merchant and exact amount
             debit_patterns = defaultdict(lambda: defaultdict(list))
@@ -828,8 +888,8 @@ async def detect_or_refresh_patterns(
             # NO EXISTING CONFIG - Detect new patterns
             logger.info("No existing config found, detecting new patterns")
 
-            # Detect salary
-            salary_pattern = detect_salary_pattern(all_transactions)
+            # Detect salary - use ONLY bank transactions (salary doesn't come from credit cards!)
+            salary_pattern = detect_salary_pattern(bank_only_transactions)
             salary_response = None
 
             if salary_pattern:
@@ -846,9 +906,12 @@ async def detect_or_refresh_patterns(
             # Get all debit transactions
             # Normalize transaction types: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
             debit_txns = [t for t in all_transactions if (t.type or '').lower() in ['debit', 'withdrawal']]
+            logger.info(f"📊 DEBUG: Found {len(debit_txns)} debit transactions out of {len(all_transactions)} total")
 
             # Filter transactions using comprehensive multi-category detection (shared helper)
+            logger.info(f"📊 DEBUG: About to filter {len(debit_txns)} debit transactions for financial obligations...")
             financial_transactions = _filter_financial_transactions(debit_txns, min_amount=500)
+            logger.info(f"📊 DEBUG: Filtered to {len(financial_transactions)} financial obligation transactions")
             for txn in financial_transactions:
                 merchant_lower = (txn.merchant_canonical or '').lower()
                 description_lower = (txn.description_raw or '').lower()
@@ -858,21 +921,31 @@ async def detect_or_refresh_patterns(
 
             logger.info(f"Total identified financial obligation transactions: {len(financial_transactions)}")
 
-            # Step 2: Apply strict criteria - EXACT same amount over 2+ months
-            debit_patterns = defaultdict(lambda: defaultdict(list))  # merchant -> amount -> [txns]
+            # Step 2: Apply flexible criteria - group by merchant first, then detect similar amounts
+            # This handles both exact-amount EMIs and reducing-balance EMIs (where amount decreases slightly)
+            merchant_transactions = defaultdict(list)  # merchant -> [txns]
 
             for txn in financial_transactions:
                 merchant = txn.merchant_canonical or txn.description_raw or "Unknown"
-                # Round to nearest rupee for exact matching
-                exact_amount = round(txn.amount, 0)
-                debit_patterns[merchant][exact_amount].append(txn)
+                merchant_transactions[merchant].append(txn)
 
-            # Convert to EMI responses - strict loan criteria
+            # Convert to EMI responses - detect patterns with similar amounts
             emi_responses = []
-            for merchant, amount_groups in debit_patterns.items():
+            for merchant, all_txns in merchant_transactions.items():
+                # Group transactions by similar amounts (within 5% variance for reducing EMIs)
+                # First try exact match, then fuzzy match
+                amount_groups = defaultdict(list)  # rounded_amount -> [txns]
+
+                for txn in all_txns:
+                    # Round to nearest rupee for exact matching
+                    exact_amount = round(txn.amount, 0)
+                    amount_groups[exact_amount].append(txn)
+
+                # Process exact matches first
+                processed_txn_ids = set()
                 for exact_amount, txns in amount_groups.items():
                     # Criteria: Exact same amount, 2+ payments
-                    if len(txns) >= 2:
+                    if len(txns) >= 2 and not any(t.transaction_id in processed_txn_ids for t in txns):
                         # Check if payments span at least 2 different months
                         dates_with_months = []
                         for txn in txns:
@@ -913,6 +986,31 @@ async def detect_or_refresh_patterns(
                             else:
                                 category, subcategory = ('Loan', 'Recurring Payment')
 
+                            # Format dates correctly
+                            first_date_str = ""
+                            last_date_str = ""
+                            if dates:
+                                try:
+                                    first_date_obj = min(dates)
+                                    last_date_obj = max(dates)
+                                    if isinstance(first_date_obj, datetime):
+                                        first_date_str = first_date_obj.strftime('%Y-%m-%d')
+                                    elif isinstance(first_date_obj, str):
+                                        first_date_str = first_date_obj
+                                    else:
+                                        first_date_str = str(first_date_obj)
+                                    
+                                    if isinstance(last_date_obj, datetime):
+                                        last_date_str = last_date_obj.strftime('%Y-%m-%d')
+                                    elif isinstance(last_date_obj, str):
+                                        last_date_str = last_date_obj
+                                    else:
+                                        last_date_str = str(last_date_obj)
+                                except Exception as e:
+                                    logger.warning(f"Error formatting dates: {e}")
+                                    first_date_str = dates[0].strftime('%Y-%m-%d') if dates and isinstance(dates[0], datetime) else str(dates[0]) if dates else ""
+                                    last_date_str = dates[-1].strftime('%Y-%m-%d') if dates and isinstance(dates[-1], datetime) else str(dates[-1]) if dates else ""
+                            
                             emi_responses.append(EMIPatternResponse(
                                 pattern_id=str(uuid.uuid4()),  # Temporary ID for new patterns
                                 merchant_source=merchant,
@@ -925,9 +1023,11 @@ async def detect_or_refresh_patterns(
                                 suggested_action='keep',
                                 suggestion_reason=f'Recurring payment: {len(unique_months)} monthly payments detected',
                                 transaction_ids=txn_ids,
-                                first_detected_date=min(dates).strftime('%Y-%m-%d') if dates else "",
-                                last_detected_date=max(dates).strftime('%Y-%m-%d') if dates else ""
+                                first_detected_date=first_date_str,
+                                last_detected_date=last_date_str
                             ))
+                            
+                            logger.info(f"✅ EMI Pattern detected: {merchant} - ₹{exact_amount:,.0f} ({len(txns)} transactions, {len(unique_months)} months)")
 
             # Sort by amount (largest first)
             emi_responses.sort(key=lambda x: x.emi_amount, reverse=True)
@@ -998,67 +1098,69 @@ async def confirm_and_save_config(
             )
             session.add(new_config)
 
-        # Get all transactions to get fresh data for selected patterns
-        all_transactions = db.get_transactions(user_id=current_user.user_id)
+        # Get transactions from BOTH bank and credit card (for EMI detection)
+        bank_transactions = session.query(BankTransaction).filter(
+            BankTransaction.user_id == current_user.user_id
+        ).all()
+
+        cc_transactions = session.query(CreditCardTransaction).filter(
+            CreditCardTransaction.user_id == current_user.user_id
+        ).all()
+
+        # Convert to Transaction-like objects for compatibility with existing detection logic
+        all_transactions = []
+
+        # Add bank transactions
+        for bt in bank_transactions:
+            txn_type = bt.type.value if hasattr(bt.type, 'value') else str(bt.type)
+            if isinstance(txn_type, str):
+                txn_type = txn_type.lower()
+            else:
+                txn_type = 'debit' if 'debit' in str(txn_type).lower() else 'credit'
+
+            adapter = type('Transaction', (), {
+                'transaction_id': bt.transaction_id,
+                'user_id': bt.user_id,
+                'account_id': bt.account_id,
+                'date': bt.date,
+                'amount': bt.amount,
+                'type': txn_type,
+                'description_raw': bt.description_raw,
+                'merchant_canonical': bt.merchant_canonical,
+                'category': bt.category.value if hasattr(bt.category, 'value') else str(bt.category),
+                'balance': bt.balance
+            })()
+            all_transactions.append(adapter)
+
+        # Add credit card transactions (for EMI detection)
+        for ct in cc_transactions:
+            txn_type = ct.type.value if hasattr(ct.type, 'value') else str(ct.type)
+            if isinstance(txn_type, str):
+                txn_type = txn_type.lower()
+            else:
+                txn_type = 'debit' if 'debit' in str(txn_type).lower() else 'credit'
+
+            adapter = type('Transaction', (), {
+                'transaction_id': ct.transaction_id,
+                'user_id': ct.user_id,
+                'account_id': ct.account_id,
+                'date': ct.date,
+                'amount': ct.amount,
+                'type': txn_type,
+                'description_raw': ct.description_raw,
+                'merchant_canonical': ct.merchant_canonical,
+                'category': ct.category.value if hasattr(ct.category, 'value') else str(ct.category),
+                'balance': getattr(ct, 'balance', None)
+            })()
+            all_transactions.append(adapter)
+
+        logger.info(f"📊 DEBUG: Retrieved {len(bank_transactions)} bank + {len(cc_transactions)} credit card transactions for /confirm endpoint")
 
         # Detect ALL recurring financial obligations using the SAME logic as detect endpoint
         logger.info("Re-detecting selected recurring financial obligations with strict filters...")
 
-        # Apply same comprehensive multi-category filtering as detect endpoint
-        financial_transactions = []
-        for txn in all_transactions:
-            # Normalize transaction type: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
-            txn_type = (txn.type or '').lower()
-            if txn_type not in ['debit', 'withdrawal'] or txn.amount < 500:
-                continue
-
-            merchant_lower = (txn.merchant_canonical or '').lower()
-            description_lower = (txn.description_raw or '').lower()
-
-            # Skip UPI, transfers
-            if 'upi/' in description_lower or 'paytm' in description_lower:
-                continue
-            if any(word in merchant_lower for word in ['sweep', 'transfer', 'ndr fruits']):
-                continue
-
-            # Check if it's a LOAN/EMI
-            is_loan = any(lender in merchant_lower for lender in [
-                'canfin', 'bajaj finserv', 'bajaj finance', 'tata capital',
-                'fullerton', 'iifl', 'mahindra finance', 'cholamandalam',
-                'l&t finance', 'lic housing', 'dhfl', 'indiabulls',
-                'personal loan', 'home loan', 'car loan', 'housing finance'
-            ]) or any(kw in description_lower for kw in [
-                'emi', 'personal loan', 'home loan', 'car loan', 'auto loan',
-                'housing loan', 'loan emi', 'canfinhomesltd', 'housingloan'
-            ])
-
-            # Check if it's INSURANCE
-            is_insurance = any(kw in merchant_lower or kw in description_lower for kw in [
-                'sbi life', 'lic', 'hdfc life', 'icici prudential', 'max life',
-                'bajaj allianz', 'tata aia', 'birla sun life', 'insurance',
-                'kotak life', 'pnb metlife', 'star health', 'care health',
-                'religare health', 'aditya birla health', 'niva bupa'
-            ])
-
-            # Check if it's INVESTMENT (Mutual Fund SIP)
-            is_investment = any(kw in merchant_lower or kw in description_lower for kw in [
-                'mutual fund', 'sip', 'systematic', 'zerodha', 'groww',
-                'paytm money', 'et money', 'kuvera', 'coin dcb',
-                'hdfc mf', 'icici prudential mf', 'sbi mf', 'axis mf',
-                'kotak mf', 'nippon india', 'franklin templeton'
-            ])
-
-            # Check if it's GOVERNMENT SCHEME
-            is_govt_scheme = any(kw in merchant_lower or kw in description_lower for kw in [
-                'apy', 'atal pension', 'nps', 'national pension', 'ppf',
-                'public provident', 'epf', 'employee provident', 'esi',
-                'employee state insurance', 'sukanya samriddhi', 'pmjjby',
-                'pmsby', 'pm jeevan', 'pm suraksha'
-            ])
-
-            # If matches any category, add to financial transactions
-            if is_loan or is_insurance or is_investment or is_govt_scheme:
-                financial_transactions.append(txn)
+        # Apply same comprehensive multi-category filtering as detect endpoint (using shared helper)
+        financial_transactions = _filter_financial_transactions(all_transactions, min_amount=100)
 
         # Group by merchant and exact amount
         debit_patterns = defaultdict(lambda: defaultdict(list))
@@ -1410,12 +1512,38 @@ async def delete_configuration(
     session = db.get_session()
 
     try:
-        # Delete will cascade to EMI patterns
-        session.query(SalarySweepConfig).filter(
-            SalarySweepConfig.user_id == current_user.user_id
+        # Get the config first
+        config = session.query(SalarySweepConfig).filter(
+            SalarySweepConfig.user_id == current_user.user_id,
+            SalarySweepConfig.is_active == True
+        ).first()
+
+        if not config:
+            # No config to delete
+            session.commit()
+            return
+
+        # Get all EMI patterns for this config
+        emi_patterns = session.query(DetectedEMIPattern).filter(
+            DetectedEMIPattern.config_id == config.config_id
+        ).all()
+
+        # Delete liabilities that reference these patterns
+        for pattern in emi_patterns:
+            session.query(Liability).filter(
+                Liability.recurring_pattern_id == pattern.pattern_id
+            ).delete()
+
+        # Delete the EMI patterns
+        session.query(DetectedEMIPattern).filter(
+            DetectedEMIPattern.config_id == config.config_id
         ).delete()
 
+        # Delete the config
+        session.delete(config)
+
         session.commit()
+        logger.info(f"Deleted salary sweep configuration for user {current_user.user_id}")
 
     except Exception as e:
         session.rollback()

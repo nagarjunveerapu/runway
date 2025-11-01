@@ -13,7 +13,7 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import Transaction, User, TransactionType
+from storage.models import Transaction, User, TransactionType, BankTransaction, CreditCardTransaction
 from auth.dependencies import get_current_user
 from config import Config
 
@@ -182,14 +182,42 @@ async def detect_loan_patterns(
     session = db.get_session()
 
     try:
-        # Get all debit transactions
-        transactions = session.query(Transaction).filter(
-            Transaction.user_id == current_user.user_id,
-            Transaction.type == TransactionType.DEBIT
-        ).order_by(Transaction.date).all()
+        # Get all debit transactions from BOTH BankTransaction and CreditCardTransaction tables
+        # This is important because credit card EMI conversions are in CreditCardTransaction
+        bank_debits = session.query(BankTransaction).filter(
+            BankTransaction.user_id == current_user.user_id,
+            BankTransaction.type == TransactionType.DEBIT
+        ).all()
+
+        cc_debits = session.query(CreditCardTransaction).filter(
+            CreditCardTransaction.user_id == current_user.user_id,
+            CreditCardTransaction.type == TransactionType.DEBIT
+        ).all()
+
+        # Combine all transactions
+        transactions = list(bank_debits) + list(cc_debits)
+
+        # Sort by date
+        transactions.sort(key=lambda x: x.date if x.date else '', reverse=False)
+
+        # Find EMI-converted transactions (original purchases) - especially from credit cards!
+        # Need to identify these FIRST so we can exclude them from pattern detection
+        emi_converted_txns = {}
+        emi_converted_txn_ids = set()
+        for txn in transactions:
+            extra_metadata = txn.extra_metadata or {}
+            if extra_metadata.get('emi_converted', False):
+                merchant = txn.merchant_canonical or get_merchant_source(txn.description_raw or '')
+                if merchant not in emi_converted_txns:
+                    emi_converted_txns[merchant] = txn
+                emi_converted_txn_ids.add(txn.transaction_id)
 
         # Filter substantial debits (potential EMIs)
-        substantial_debits = [t for t in transactions if float(t.amount) >= 10000]
+        # EXCLUDE EMI-converted original purchases - we only want the recurring EMI payments
+        substantial_debits = [
+            t for t in transactions
+            if float(t.amount) >= 10000 and t.transaction_id not in emi_converted_txn_ids
+        ]
 
         # Group by merchant/source
         debit_groups = {}
@@ -206,15 +234,6 @@ async def detect_loan_patterns(
                 'merchant_canonical': txn.merchant_canonical,
                 'amount': amount
             })
-
-        # Find EMI-converted transactions (original purchases)
-        emi_converted_txns = {}
-        for txn in transactions:
-            extra_metadata = txn.extra_metadata or {}
-            if extra_metadata.get('emi_converted', False):
-                merchant = txn.merchant_canonical or get_merchant_source(txn.description_raw or '')
-                if merchant not in emi_converted_txns:
-                    emi_converted_txns[merchant] = txn
         
         # Find recurring patterns (3+ occurrences)
         loan_patterns = []
@@ -307,18 +326,24 @@ async def detect_loan_patterns(
         # Sort by EMI amount (highest first)
         loan_patterns.sort(key=lambda x: x['avg_emi'], reverse=True)
 
-        # Calculate income and expenses for cash flow
-        all_txns = session.query(Transaction).filter(
-            Transaction.user_id == current_user.user_id
+        # Calculate income and expenses for cash flow from BOTH bank and credit card transactions
+        bank_txns = session.query(BankTransaction).filter(
+            BankTransaction.user_id == current_user.user_id
         ).all()
+
+        cc_txns = session.query(CreditCardTransaction).filter(
+            CreditCardTransaction.user_id == current_user.user_id
+        ).all()
+
+        all_txns = list(bank_txns) + list(cc_txns)
 
         # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
         income = sum(
-            float(t.amount) for t in all_txns 
+            float(t.amount) for t in all_txns
             if (t.type.value if hasattr(t.type, 'value') else t.type) == TransactionType.CREDIT.value
         )
         expenses = sum(
-            float(t.amount) for t in all_txns 
+            float(t.amount) for t in all_txns
             if (t.type.value if hasattr(t.type, 'value') else t.type) == TransactionType.DEBIT.value
                       and not any(p['source'] in str(t.description_raw or '').lower()
                                 for p in loan_patterns))

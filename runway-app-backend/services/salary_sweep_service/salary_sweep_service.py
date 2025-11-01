@@ -180,11 +180,33 @@ class SalarySweepService:
         # Normalize transaction type: handle both 'withdrawal'/'deposit' and 'debit'/'credit'
         txn_type = txn.type.lower() if txn.type else ''
         is_debit = txn_type in ['debit', 'withdrawal']
-        
+
         if not is_debit or txn.amount < min_amount:
             return False
+
         merchant_lower = (txn.merchant_canonical or '').lower()
         description_lower = (txn.description_raw or '').lower()
+
+        # For substantial debits (>= 10000), be more lenient and allow them through
+        # This catches credit card EMIs that might not have obvious loan keywords
+        # Pattern detection will filter out non-recurring ones anyway
+        if txn.amount >= 10000:
+            # Still exclude obvious non-financial categories
+            ks = self._keyword_sets()
+            # Skip only if it's obviously NOT a financial obligation (like groceries, dining, etc.)
+            skip_keywords = ['grocery', 'supermarket', 'restaurant', 'food', 'dining', 'cafe', 'coffee']
+            if not any(sk in merchant_lower for sk in skip_keywords):
+                return True  # Allow substantial debits through for pattern detection
+
+        # Check category - if it's already categorized as a financial obligation, include it
+        # This is important for credit card EMIs that may not have loan keywords
+        category = getattr(txn, 'category', None)
+        if category:
+            category_lower = category.lower() if isinstance(category, str) else str(category).lower()
+            financial_categories = ['emi & loans', 'insurance', 'mutual funds & investments', 'government schemes']
+            if any(cat in category_lower for cat in financial_categories):
+                return True  # Already categorized as financial obligation
+
         ks = self._keyword_sets()
         # Hard exclude FASTag/toll-like items from recurring obligation detection
         if any(ex in merchant_lower or ex in description_lower for ex in ks['exclude_investment_desc']):
