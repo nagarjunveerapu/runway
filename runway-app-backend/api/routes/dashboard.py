@@ -23,7 +23,7 @@ from collections import defaultdict
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import User, Asset, Liability
+from storage.models import User, Asset, Liability, TransactionType
 from auth.dependencies import get_current_user
 from config import Config
 from utils.date_parser import parse_month_from_date
@@ -287,7 +287,9 @@ async def get_dashboard_summary(current_user: User = Depends(get_current_user)):
             txn_month = parse_month_from_date(txn.date) if txn.date else ""
             if txn_month == current_month_str:
                 current_count += 1
-                if txn.type == "credit":
+                # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+                txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+                if txn_type_value == TransactionType.CREDIT.value:
                     current_income += txn.amount
                 else:  # debit
                     current_expenses += txn.amount
@@ -318,7 +320,9 @@ async def get_dashboard_summary(current_user: User = Depends(get_current_user)):
             txn_month = parse_month_from_date(txn.date) if txn.date else ""
             if txn_month == prev_month_str:
                 prev_count += 1
-                if txn.type == "credit":
+                # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+                txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+                if txn_type_value == TransactionType.CREDIT.value:
                     prev_income += txn.amount
                 else:
                     prev_expenses += txn.amount

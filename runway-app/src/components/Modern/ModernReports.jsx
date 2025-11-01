@@ -5,8 +5,9 @@ import { getSummary, getTopMerchants } from '../../api/services/analytics';
 import CategoryBreakdown from '../Reports/CategoryBreakdown';
 import TopMerchants from '../Reports/TopMerchants';
 import RecurringPayments from '../../features/reports/recurring-payments/RecurringPayments';
-import FIRECalculator from '../../features/reports/fire-calculator/FIRECalculator';
-import EmergencyFundHealth from '../../features/reports/emergency-fund/EmergencyFundHealth';
+// DISABLED: FIRE Calculator and Emergency Fund (removed from UI, code preserved)
+// import FIRECalculator from '../../features/reports/fire-calculator/FIRECalculator';
+// import EmergencyFundHealth from '../../features/reports/emergency-fund/EmergencyFundHealth';
 import TransactionList from '../Reports/TransactionList';
 
 /**
@@ -156,11 +157,11 @@ export default function ModernReports({ onNavigate }) {
 
             {!loading && (
               <>
-                {/* FIRE Calculator */}
-                <FIRECalculator />
+                {/* DISABLED: FIRE Calculator (removed from UI, code preserved) */}
+                {/* <FIRECalculator /> */}
 
-                {/* Emergency Fund Health Check */}
-                <EmergencyFundHealth />
+                {/* DISABLED: Emergency Fund Health Check (removed from UI, code preserved) */}
+                {/* <EmergencyFundHealth /> */}
 
                 {/* Backend Analytics Summary */}
                 {analyticsData && (

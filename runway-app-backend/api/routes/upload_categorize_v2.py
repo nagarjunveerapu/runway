@@ -22,7 +22,7 @@ from datetime import datetime
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import Transaction, Asset, User, Account
+from storage.models import Transaction, Asset, User, Account, TransactionType, TransactionSource
 from auth.dependencies import get_current_user
 from config import Config
 from utils.date_parser import parse_date, parse_month_from_date
@@ -132,7 +132,7 @@ async def upload_csv_smart(
         # This is optional - just for the response statistics
         imported_transactions = session.query(Transaction).filter(
             Transaction.user_id == current_user.user_id,
-            Transaction.source == 'csv_upload'
+            Transaction.source == TransactionSource.CSV
         ).order_by(Transaction.created_at.desc()).limit(result['transactions_imported']).all()
         
         for txn in imported_transactions:
@@ -266,7 +266,7 @@ async def upload_pdf_smart(
         # This is optional - just for the response statistics
         imported_transactions = session.query(Transaction).filter(
             Transaction.user_id == current_user.user_id,
-            Transaction.source == 'pdf_upload'
+            Transaction.source == TransactionSource.PDF
         ).order_by(Transaction.created_at.desc()).limit(result['transactions_imported']).all()
         
         for txn in imported_transactions:

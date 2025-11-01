@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, func, text
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy.pool import StaticPool
 
-from .models import Base, Transaction, Merchant, Account, User
+from .models import Base, Transaction, Merchant, Account, User, TransactionType, TransactionSource, TransactionCategory, RecurringType
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from schema import CanonicalTransaction
@@ -315,11 +315,11 @@ class DatabaseManager:
             total_count = query.count()
 
             # Total by type
-            total_debit = query.filter(Transaction.type == 'debit').with_entities(
+            total_debit = query.filter(Transaction.type == TransactionType.DEBIT).with_entities(
                 func.sum(Transaction.amount)
             ).scalar() or 0.0
 
-            total_credit = query.filter(Transaction.type == 'credit').with_entities(
+            total_credit = query.filter(Transaction.type == TransactionType.CREDIT).with_entities(
                 func.sum(Transaction.amount)
             ).scalar() or 0.0
 
@@ -334,10 +334,12 @@ class DatabaseManager:
             category_counts = {}
             
             for txn in transactions:
-                # Skip EMI-converted transactions
-                extra_metadata = txn.extra_metadata or {}
-                if extra_metadata.get('emi_converted'):
-                    continue
+                # Include all transactions (EMI-converted transactions are now included)
+                # Note: EMI-converted transactions are typically large purchases that were
+                # converted to EMI, so including them gives a complete picture of spending
+                # extra_metadata = txn.extra_metadata or {}
+                # if extra_metadata.get('emi_converted'):
+                #     continue  # COMMENTED OUT: Now including EMI-converted transactions
                 
                 category = txn.category or 'Unknown'
                 merchant = txn.merchant_canonical or 'Unknown'
@@ -346,10 +348,12 @@ class DatabaseManager:
                 if key not in category_merchant_totals:
                     category_merchant_totals[key] = {'debit': 0.0, 'credit': 0.0}
                 
-                if txn.type == 'debit':
+                # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+                txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+                if txn_type_value == TransactionType.DEBIT.value:
                     category_merchant_totals[key]['debit'] += txn.amount
                     category_counts[category] = category_counts.get(category, 0) + 1
-                elif txn.type == 'credit':
+                elif txn_type_value == TransactionType.CREDIT.value:
                     category_merchant_totals[key]['credit'] += txn.amount
             
             # Calculate net totals per category (debit - credit)
@@ -421,11 +425,11 @@ if __name__ == "__main__":
     txn = create_transaction(
         date="2025-10-26",
         amount=500.00,
-        type="debit",
+        type=TransactionType.DEBIT.value,
         description="SWIGGY BANGALORE",
         merchant_canonical="Swiggy",
-        category="Food & Dining",
-        source="manual"
+        category=TransactionCategory.FOOD_DINING.value,
+        source=TransactionSource.MANUAL.value
     )
 
     # Insert transaction

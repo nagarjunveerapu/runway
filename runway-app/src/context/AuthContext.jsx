@@ -17,40 +17,43 @@ export const AuthProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Set authorization header if token exists
-    if (token) {
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-      // Verify token by fetching current user
-      fetchCurrentUser();
-    } else {
-      // DEV MODE: Auto-login for development (comment out for production)
-      const devAutoLogin = async () => {
-        try {
-          const devUsername = 'test@example.com';
-          const devPassword = 'testpassword123';
-          
-          const response = await api.post('/auth/login', { username: devUsername, password: devPassword });
-          const { access_token } = response.data;
-          
-          setToken(access_token);
-          localStorage.setItem('token', access_token);
-          api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
-          
-          await fetchCurrentUser();
-          console.log('DEV: Auto-logged in as', devUsername);
-        } catch (error) {
-          console.error('DEV auto-login failed:', error);
-          setLoading(false);
-        }
-      };
-      
-      // Uncomment the line below to enable auto-login
-      devAutoLogin();
-      
-      // Comment out the line below if using auto-login
-      // setLoading(false);
-    }
-  }, [token]);
+    // Initialize auth - run only once on mount
+    const initializeAuth = async () => {
+      if (token) {
+        // Token exists, verify it
+        api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        await fetchCurrentUser();
+      } else {
+        // No token - try auto-login in dev mode
+        const devAutoLogin = async () => {
+          try {
+            const devUsername = 'test@example.com';
+            const devPassword = 'testpassword123';
+            
+            const response = await api.post('/auth/login', { username: devUsername, password: devPassword });
+            const { access_token } = response.data;
+            
+            setToken(access_token);
+            localStorage.setItem('token', access_token);
+            api.defaults.headers.common['Authorization'] = `Bearer ${access_token}`;
+            
+            await fetchCurrentUser();
+            console.log('DEV: Auto-logged in as', devUsername);
+          } catch (error) {
+            console.error('DEV auto-login failed:', error);
+            // Only set loading to false if auto-login fails
+            setLoading(false);
+          }
+        };
+        
+        // Try auto-login in dev mode
+        devAutoLogin();
+      }
+    };
+
+    initializeAuth();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []); // Empty dependency array - only run on mount
 
   const fetchCurrentUser = async () => {
     try {
@@ -59,8 +62,13 @@ export const AuthProvider = ({ children }) => {
       setLoading(false);
     } catch (error) {
       console.error('Failed to fetch current user:', error);
-      // Token is invalid, clear it
-      logout();
+      // Token is invalid, clear it but don't redirect immediately
+      // Let the ProtectedRoute handle the redirect
+      setToken(null);
+      setUser(null);
+      localStorage.removeItem('token');
+      delete api.defaults.headers.common['Authorization'];
+      setLoading(false);
     }
   };
 

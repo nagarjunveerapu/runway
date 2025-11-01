@@ -10,7 +10,7 @@ from datetime import datetime
 import uuid
 
 from storage.database import DatabaseManager
-from storage.models import Transaction, User
+from storage.models import Transaction, User, TransactionType, TransactionSource, TransactionCategory
 from schema import CanonicalTransaction
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,40 @@ class TransactionRepository:
             db_manager: DatabaseManager instance
         """
         self.db_manager = db_manager
+    
+    def _get_source_value(self, source_value):
+        """
+        Convert source value to proper format (ENUM value or string)
+        
+        Args:
+            source_value: Source value (string or TransactionSource enum)
+            
+        Returns:
+            String value for source
+        """
+        if source_value is None:
+            return TransactionSource.MANUAL.value
+        if isinstance(source_value, TransactionSource):
+            return source_value.value
+        if isinstance(source_value, str):
+            # Map common string values to ENUM values
+            source_lower = source_value.lower()
+            if source_lower in ['pdf', 'pdf_upload']:
+                return TransactionSource.PDF.value
+            elif source_lower in ['csv', 'csv_upload']:
+                return TransactionSource.CSV.value
+            elif source_lower in ['excel', 'excel_upload']:
+                return TransactionSource.EXCEL.value
+            elif source_lower in ['aa', 'account_aggregator']:
+                return TransactionSource.AA.value
+            elif source_lower in ['api', 'api_upload']:
+                return TransactionSource.API.value
+            elif source_lower in ['manual', 'manually']:
+                return TransactionSource.MANUAL.value
+            else:
+                # Unknown source, default to manual
+                return TransactionSource.MANUAL.value
+        return TransactionSource.MANUAL.value
     
     def insert_transaction(
         self,
@@ -66,7 +100,17 @@ class TransactionRepository:
             # Legacy format: 'transaction_type', 'remark', 'raw_remark'
             # New format: 'type', 'description', 'description_raw'
             # Prioritize normalized description_raw for duplicate detection
-            txn_type = transaction_dict.get('transaction_type') or transaction_dict.get('type', 'debit')
+            txn_type_str = transaction_dict.get('transaction_type') or transaction_dict.get('type', 'debit')
+            # Convert string to TransactionType enum
+            try:
+                if isinstance(txn_type_str, str):
+                    txn_type = TransactionType.DEBIT if txn_type_str.lower() == 'debit' else TransactionType.CREDIT
+                elif isinstance(txn_type_str, TransactionType):
+                    txn_type = txn_type_str
+                else:
+                    txn_type = TransactionType.DEBIT
+            except:
+                txn_type = TransactionType.DEBIT
             
             # Use description_raw if available (normalized, without date prefix)
             # Otherwise fall back to description, then remark, then raw_remark
@@ -104,17 +148,19 @@ class TransactionRepository:
                 date=txn_date,
                 timestamp=datetime.now(),
                 amount=float(transaction_dict.get('amount', 0)),
-                type=txn_type,
+                # For PostgreSQL ENUM, pass the ENUM object itself (SQLAlchemy handles conversion)
+                # For SQLite, pass the string value  
+                type=txn_type if isinstance(txn_type, TransactionType) else TransactionType.DEBIT,
                 description_raw=raw_description[:255] if raw_description else None,
                 clean_description=description[:255] if description else None,
                 merchant_raw=transaction_dict.get('merchant_raw', '')[:255] or None,
                 merchant_canonical=transaction_dict.get('merchant_canonical', '')[:255] or None,
-                category=transaction_dict.get('category', 'Unknown')[:100],
+                category=self._get_category_value(transaction_dict.get('category', 'Unknown')),
                 transaction_sub_type=transaction_dict.get('transaction_sub_type')[:100] if transaction_dict.get('transaction_sub_type') else None,
                 # Handle balance: use 0.0 if present (including zero), None only if missing
                 # FIX: Check 'is not None' instead of truthiness, as 0.0 is falsy but valid
                 balance=float(transaction_dict.get('balance')) if transaction_dict.get('balance') is not None else None,
-                source=transaction_dict.get('source', 'upload'),
+                source=self._get_source_value(transaction_dict.get('source')),
                 is_duplicate=transaction_dict.get('is_duplicate', False),
                 duplicate_count=transaction_dict.get('duplicate_count', 0),
                 bank_name=transaction_dict.get('bank_name'),

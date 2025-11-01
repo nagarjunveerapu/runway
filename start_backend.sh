@@ -9,8 +9,12 @@ echo ""
 
 cd runway-app-backend
 
-# Ensure backend uses its own DB path
-export DATABASE_URL="sqlite:///data/finance.db"
+# Use DATABASE_URL from .env file if it exists, otherwise default to SQLite
+# Don't override if .env file has DATABASE_URL set
+if [ ! -f ".env" ] || ! grep -q "^DATABASE_URL=" .env; then
+    # Only set SQLite if no DATABASE_URL in .env
+    export DATABASE_URL="sqlite:///data/finance.db"
+fi
 
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then

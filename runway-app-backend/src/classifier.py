@@ -29,7 +29,8 @@ KEYWORD_CATEGORY_MAP: Dict[str, str] = {
     'asian': 'Entertainment',
     'spi': 'Entertainment',
     'cinepolis': 'Entertainment',
-    'big': 'Entertainment',
+    'big cinema': 'Entertainment',  # Changed from 'big' to avoid matching Big Bazaar
+    'big cinemas': 'Entertainment',
     'sungold': 'Entertainment',
     'regal': 'Entertainment',
     # Education
@@ -55,6 +56,72 @@ KEYWORD_CATEGORY_MAP: Dict[str, str] = {
     'skillshare': 'Education',
     'masterclass': 'Education',
     'simplilearn': 'Education',
+    # Shopping & Retail Stores (India)
+    # Apple Authorized Resellers
+    'ample technologies': 'Shopping',
+    'ample': 'Shopping',
+    'aptronix': 'Shopping',
+    'iplanet': 'Shopping',
+    'imagine': 'Shopping',
+    'invent': 'Shopping',
+    'ivenus': 'Shopping',
+    'maple': 'Shopping',
+    'unicorn': 'Shopping',
+    'apple': 'Shopping',
+    # Major Retail Chains
+    'reliance retail': 'Shopping',
+    'reliance trends': 'Shopping',
+    'reliance digital': 'Shopping',
+    'reliance footprint': 'Shopping',
+    'reliance': 'Shopping',  # Generic Reliance stores
+    'big bazaar': 'Shopping',
+    'bigbazaar': 'Shopping',
+    'dmart': 'Shopping',
+    'd mart': 'Shopping',
+    'pantaloons': 'Shopping',
+    'shoppers stop': 'Shopping',
+    'lifestyle': 'Shopping',
+    'central': 'Shopping',
+    'lifestyle central': 'Shopping',
+    'westside': 'Shopping',
+    'max': 'Shopping',
+    'more retail': 'Shopping',
+    'more supermarket': 'Shopping',
+    'spencer': 'Shopping',
+    'spencer retail': 'Shopping',
+    'hypercity': 'Shopping',
+    'croma': 'Shopping',
+    'vijay sales': 'Shopping',
+    'ezone': 'Shopping',
+    'poorvika': 'Shopping',
+    'sathya': 'Shopping',
+    'vasanth': 'Shopping',
+    'jai ganesh': 'Shopping',
+    'next': 'Shopping',
+    'landmark': 'Shopping',
+    'shoppers world': 'Shopping',
+    'star bazaar': 'Shopping',
+    'easyday': 'Shopping',
+    'star market': 'Shopping',
+    # E-commerce
+    'amazon': 'Shopping',
+    'amazon pay': 'Shopping',
+    'flipkart': 'Shopping',
+    'myntra': 'Shopping',
+    'snapdeal': 'Shopping',
+    'meesho': 'Shopping',
+    'paytm mall': 'Shopping',
+    'jiomart': 'Shopping',
+    # General Retail Patterns
+    'retail': 'Shopping',
+    'retail ltd': 'Shopping',
+    'retail pvt': 'Shopping',
+    'supermarket': 'Shopping',
+    'hypermarket': 'Shopping',
+    'megastore': 'Shopping',
+    'department store': 'Shopping',
+    'mall': 'Shopping',
+    'shopping center': 'Shopping',
     'swiggy': 'Food',
     'zomato': 'Food',
     'zepto': 'Food',
@@ -225,6 +292,28 @@ def rule_based_category(remark: str, merchant: Optional[str] = None) -> Tuple[st
         if keyword in s or (merchant and keyword in merchant.lower()):
             category = 'Transport'
             break
+    
+    # SECOND: Check for retail/shopping patterns (before generic matching)
+    if not category:
+        # Check merchant name for retail patterns
+        if merchant:
+            m_lower = merchant.lower()
+            retail_patterns = [
+                'retail', 'store', 'supermarket', 'hypermarket', 'mall', 
+                'shopping', 'department', 'megastore', 'showroom'
+            ]
+            # Only match if it's clearly a retail store, not excluded contexts
+            if any(pattern in m_lower for pattern in retail_patterns):
+                # Exclude if it's clearly NOT retail (like "retail securities")
+                if 'securities' not in m_lower and 'investment' not in m_lower:
+                    category = 'Shopping'
+        
+        # Check description for retail keywords
+        if not category:
+            retail_keywords = ['retail ltd', 'retail pvt', 'supermarket', 'hypermarket', 
+                             'department store', 'shopping center', 'shopping mall']
+            if any(keyword in s for keyword in retail_keywords):
+                category = 'Shopping'
     
     # merchant first
     if not category and merchant:

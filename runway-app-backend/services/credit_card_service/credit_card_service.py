@@ -14,7 +14,7 @@ from datetime import datetime
 
 from storage.database import DatabaseManager
 from storage.models import (
-    Account, CreditCardStatement, Transaction
+    Account, CreditCardStatement, Transaction, TransactionType, TransactionSource
 )
 
 logger = logging.getLogger(__name__)
@@ -291,7 +291,7 @@ class CreditCardService:
             query = session.query(Transaction).filter(
                 Transaction.user_id == user_id,
                 Transaction.category == 'Credit Card Payment',
-                Transaction.type == 'credit'  # Only payments (credits)
+                Transaction.type == TransactionType.CREDIT  # Only payments (credits)
             )
             
             transactions = query.order_by(Transaction.date.desc()).all()

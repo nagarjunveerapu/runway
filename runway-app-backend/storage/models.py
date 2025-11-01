@@ -4,12 +4,123 @@ SQLAlchemy Database Models
 Defines the database schema for the personal finance app.
 """
 
-from sqlalchemy import Column, String, Float, Integer, DateTime, Boolean, ForeignKey, Text, JSON
+from sqlalchemy import Column, String, Float, Integer, DateTime, Boolean, ForeignKey, Text, JSON, Enum as SQLEnum, TypeDecorator
+from sqlalchemy.dialects.postgresql import ENUM as PostgresEnum
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from datetime import datetime
+import enum
 
 Base = declarative_base()
+
+
+# ENUM definitions for PostgreSQL compatibility
+# These are used both in database schema and Python code
+class TransactionType(enum.Enum):
+    """Transaction type enumeration"""
+    DEBIT = "debit"
+    CREDIT = "credit"
+
+
+class TransactionSource(enum.Enum):
+    """Transaction source enumeration"""
+    MANUAL = "manual"
+    PDF = "pdf"
+    CSV = "csv"
+    EXCEL = "excel"
+    AA = "aa"
+    API = "api"
+
+
+class RecurringType(enum.Enum):
+    """Recurring transaction type enumeration"""
+    SALARY = "salary"
+    EMI = "emi"
+    INVESTMENT = "investment"
+    EXPENSE = "expense"
+
+
+class TransactionCategory(enum.Enum):
+    """Transaction category enumeration"""
+    FOOD_DINING = "Food & Dining"
+    GROCERIES = "Groceries"
+    SHOPPING = "Shopping"
+    TRANSPORT = "Transport"
+    ENTERTAINMENT = "Entertainment"
+    BILLS_UTILITIES = "Bills & Utilities"
+    HEALTHCARE = "Healthcare"
+    EDUCATION = "Education"
+    TRAVEL = "Travel"
+    INVESTMENT = "Investment"
+    TRANSFER = "Transfer"
+    SALARY = "Salary"
+    REFUND = "Refund"
+    OTHER = "Other"
+    UNKNOWN = "Unknown"
+
+
+# TypeDecorator to handle PostgreSQL ENUMs that store values, not member names
+class PostgresEnumByValue(TypeDecorator):
+    """TypeDecorator for PostgreSQL ENUMs that maps by value instead of member name"""
+    impl = String
+    cache_ok = True
+    
+    def __init__(self, enum_class, enum_name):
+        super().__init__()
+        self.enum_class = enum_class
+        self.enum_name = enum_name
+        # Create a mapping from value to enum member
+        self._value_to_enum = {member.value: member for member in enum_class}
+        
+    def load_dialect_impl(self, dialect):
+        if dialect.name == 'postgresql':
+            # Use String type and handle conversion manually
+            # This bypasses PostgresEnum's member-name-based lookup
+            return dialect.type_descriptor(String)
+        else:
+            return dialect.type_descriptor(String)
+    
+    def process_bind_param(self, value, dialect):
+        """Convert Python enum/string to database value"""
+        if value is None:
+            return None
+        if isinstance(value, self.enum_class):
+            return value.value
+        if isinstance(value, str):
+            # Return string as-is (database will validate)
+            return value
+        return str(value)
+    
+    def process_result_value(self, value, dialect):
+        """Convert database value to Python enum"""
+        if value is None:
+            return None
+        if isinstance(value, str):
+            # Map value to enum member
+            enum_member = self._value_to_enum.get(value)
+            if enum_member:
+                return enum_member
+            # If not found, return string as fallback (shouldn't happen with valid data)
+            return value
+        return value
+
+
+# Helper function to get the appropriate ENUM column type
+def _get_enum_column_type(enum_class, enum_name):
+    """
+    Returns the appropriate column type based on database.
+    For PostgreSQL, returns PostgresEnumByValue (handles value mapping).
+    For SQLite and others, returns String.
+    """
+    from config import Config
+    db_url = Config.DATABASE_URL
+    
+    if db_url and db_url.startswith('postgresql'):
+        # Use custom TypeDecorator that maps by value
+        return PostgresEnumByValue(enum_class, enum_name)
+    else:
+        # Use String for SQLite and other databases
+        return SQLEnum(enum_class)
 
 
 class User(Base):
@@ -100,7 +211,12 @@ class Transaction(Base):
     date = Column(String(10), nullable=False, index=True)  # YYYY-MM-DD
     timestamp = Column(DateTime)  # Full timestamp if available
     amount = Column(Float, nullable=False)
-    type = Column(String(10), nullable=False)  # 'debit' or 'credit'
+    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
+    type = Column(
+        _get_enum_column_type(TransactionType, 'transaction_type'),
+        nullable=False,
+        default=TransactionType.DEBIT
+    )
 
     # Description
     description_raw = Column(Text)
@@ -111,7 +227,12 @@ class Transaction(Base):
     merchant_canonical = Column(String(255), index=True)
 
     # Categorization
-    category = Column(String(100), index=True)  # Primary category (e.g., "Education")
+    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
+    category = Column(
+        _get_enum_column_type(TransactionCategory, 'transaction_category'),
+        default=TransactionCategory.UNKNOWN,
+        index=True
+    )
     transaction_sub_type = Column(String(100))  # Sub-type classification (e.g., "EMI/Loan", "Credit Card Payment")
     labels = Column(JSON)  # Multi-label support
     confidence = Column(Float)  # ML prediction confidence
@@ -130,7 +251,11 @@ class Transaction(Base):
     is_duplicate = Column(Boolean, default=False)
 
     # Source tracking
-    source = Column(String(50))  # pdf, csv, aa, manual
+    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
+    source = Column(
+        _get_enum_column_type(TransactionSource, 'transaction_source'),
+        nullable=True
+    )
     bank_name = Column(String(100))
     statement_period = Column(String(50))
 
@@ -145,7 +270,11 @@ class Transaction(Base):
     
     # Recurring pattern detection
     is_recurring = Column(Boolean, default=False, index=True)  # Recurring transaction?
-    recurring_type = Column(String(20))  # 'salary' | 'emi' | 'investment' | 'expense'
+    # Use ENUM for PostgreSQL (created via setup_enums.py), String for SQLite
+    recurring_type = Column(
+        _get_enum_column_type(RecurringType, 'recurring_type'),
+        nullable=True
+    )
     recurring_group_id = Column(String(36), index=True)  # Groups similar recurring transactions  # YYYY-MM format for monthly aggregation
 
     # Timestamps

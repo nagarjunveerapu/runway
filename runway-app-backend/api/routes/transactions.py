@@ -19,7 +19,7 @@ from api.models.schemas import (
     TransactionList
 )
 from storage.database import DatabaseManager
-from storage.models import User
+from storage.models import User, TransactionType
 from auth.dependencies import get_current_user
 from schema import CanonicalTransaction, create_transaction
 from config import Config
@@ -87,7 +87,12 @@ async def recategorize_transactions(
         ).all()
         
         # Detect salary patterns (large recurring credits)
-        credit_txns = [t for t in transactions if t.type == 'credit' and float(t.amount) >= 50000]
+        # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+        credit_txns = [
+            t for t in transactions 
+            if (t.type.value if hasattr(t.type, 'value') else t.type) == TransactionType.CREDIT.value 
+            and float(t.amount) >= 50000
+        ]
         credit_groups = {}
         
         for txn in credit_txns:

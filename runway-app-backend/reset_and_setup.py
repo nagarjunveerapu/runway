@@ -106,8 +106,19 @@ def reset_and_setup():
         session = db.get_session()
         
         try:
-            # Ensure no duplicate test user
-            session.query(User).filter(User.email == email).delete()
+            # Ensure no duplicate test user - delete related records first
+            existing_user = session.query(User).filter(User.email == email).first()
+            if existing_user:
+                from storage.models import Account, Transaction
+                user_id = existing_user.user_id
+                # Delete related transactions first (cascading should handle this, but being explicit)
+                session.query(Transaction).filter(Transaction.user_id == user_id).delete()
+                # Delete related accounts
+                session.query(Account).filter(Account.user_id == user_id).delete()
+                session.commit()
+                # Now delete the user
+                session.query(User).filter(User.email == email).delete()
+                session.commit()
 
             user = User(
                 user_id=str(uuid.uuid4()),

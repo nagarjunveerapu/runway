@@ -13,7 +13,7 @@ import logging
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import Transaction, User
+from storage.models import Transaction, User, TransactionType
 from auth.dependencies import get_current_user
 from config import Config
 
@@ -27,6 +27,10 @@ class DetectedLoan(BaseModel):
     avg_emi: float
     count: int
     txns: List[dict] = []
+    original_principal: Optional[float] = None
+    remaining_principal: Optional[float] = None
+    is_completed: bool = False
+    total_paid: Optional[float] = None
 
 class LoanInput(BaseModel):
     loan_id: str
@@ -36,6 +40,9 @@ class LoanInput(BaseModel):
     remaining_principal: float
     interest_rate: float
     remaining_tenure_months: int
+    is_completed: bool = False
+    original_principal: Optional[float] = None
+    total_paid: Optional[float] = None
 
 class PrepaymentScenario(BaseModel):
     name: str
@@ -78,13 +85,30 @@ def get_merchant_source(description):
         return 'sbi'
     if 'axis' in desc_lower:
         return 'axis'
-
-    # Extract first few words
+    
+    # Remove EMI keywords for better matching
+    desc_clean = desc_lower.replace('emi', '').strip()
+    
+    # Extract merchant name (first 2-3 words, excluding common suffixes)
+    words = desc_clean.split()
+    # Remove common suffixes
+    filtered_words = []
+    skip_words = ['ltd', 'limited', 'pvt', 'private', 'p', 'lt', 'ltd.', 'private.', 'bangal', 'gurgaon', 'bangalore', 'in']
+    for word in words:
+        if word not in skip_words:
+            filtered_words.append(word)
+        if len(filtered_words) >= 3:
+            break
+    
+    if filtered_words:
+        return ' '.join(filtered_words[:3]).title()  # Title case for consistency
+    
+    # Fallback: extract first few words
     words = description.split()
     if len(words) >= 2:
-        return ' '.join(words[:2]).lower()
+        return ' '.join(words[:2]).title()
 
-    return description[:30].lower()
+    return description[:30].title()
 
 
 def is_similar_amount(amt1, amt2, variance=0.15):
@@ -161,7 +185,7 @@ async def detect_loan_patterns(
         # Get all debit transactions
         transactions = session.query(Transaction).filter(
             Transaction.user_id == current_user.user_id,
-            Transaction.type == 'debit'
+            Transaction.type == TransactionType.DEBIT
         ).order_by(Transaction.date).all()
 
         # Filter substantial debits (potential EMIs)
@@ -183,6 +207,15 @@ async def detect_loan_patterns(
                 'amount': amount
             })
 
+        # Find EMI-converted transactions (original purchases)
+        emi_converted_txns = {}
+        for txn in transactions:
+            extra_metadata = txn.extra_metadata or {}
+            if extra_metadata.get('emi_converted', False):
+                merchant = txn.merchant_canonical or get_merchant_source(txn.description_raw or '')
+                if merchant not in emi_converted_txns:
+                    emi_converted_txns[merchant] = txn
+        
         # Find recurring patterns (3+ occurrences)
         loan_patterns = []
         for source, txns in debit_groups.items():
@@ -203,11 +236,72 @@ async def detect_loan_patterns(
             # Find patterns with 3+ occurrences
             for amt, group in amount_groups.items():
                 if len(group) >= 3:
+                    # Check if this merchant has an EMI-converted transaction
+                    # Try multiple matching strategies
+                    merchant = group[0].get('merchant_canonical') or source
+                    
+                    # First try exact merchant match
+                    original_txn = emi_converted_txns.get(merchant)
+                    
+                    # If no exact match, try fuzzy matching
+                    if not original_txn:
+                        merchant_lower = merchant.lower()
+                        # Extract key words from merchant (words longer than 3 chars)
+                        merchant_keywords = [w for w in merchant_lower.split() if len(w) > 3]
+                        
+                        # Check each EMI-converted transaction
+                        for emi_merchant, emi_txn in emi_converted_txns.items():
+                            emi_merchant_lower = emi_merchant.lower()
+                            emi_keywords = [w for w in emi_merchant_lower.split() if len(w) > 3]
+                            
+                            # Check if key words match
+                            if merchant_keywords and emi_keywords:
+                                # Check if significant keywords match (e.g., "HDFC", "School", "Ample", "Technologies")
+                                matching_keywords = [k for k in merchant_keywords if k in emi_keywords or any(k in e for e in emi_keywords)]
+                                if len(matching_keywords) >= min(len(merchant_keywords), len(emi_keywords)) - 1:
+                                    original_txn = emi_txn
+                                    break
+                        
+                        # Last resort: check if merchant name is contained in EMI merchant name or vice versa
+                        if not original_txn:
+                            for emi_merchant, emi_txn in emi_converted_txns.items():
+                                emi_merchant_lower = emi_merchant.lower()
+                                # Check if one contains the other (for cases like "HDFC" vs "HDFC School")
+                                if merchant_lower in emi_merchant_lower or emi_merchant_lower in merchant_lower:
+                                    original_txn = emi_txn
+                                    break
+                    
+                    # Calculate principal and remaining balance
+                    original_principal = None
+                    remaining_principal = None
+                    total_paid = None
+                    is_completed = False
+                    
+                    if original_txn:
+                        original_principal = float(original_txn.amount)
+                        # Only count EMI payments (transactions with "EMI" in description)
+                        emi_payments = [
+                            t for t in group 
+                            if 'emi' in str(t.get('description_raw', '')).lower() or 
+                               'emi' in str(merchant).lower()
+                        ]
+                        if not emi_payments:
+                            # If no explicit EMI keyword, assume all are EMI payments
+                            emi_payments = group
+                        
+                        total_paid = sum(t['amount'] for t in emi_payments)
+                        remaining_principal = original_principal - total_paid
+                        is_completed = remaining_principal <= 0
+                    
                     loan_patterns.append({
                         'source': source,
                         'txns': [t for t in group],
                         'avg_emi': sum(t['amount'] for t in group) / len(group),
-                        'count': len(group)
+                        'count': len(group),
+                        'original_principal': original_principal,
+                        'remaining_principal': remaining_principal if remaining_principal is not None else None,
+                        'total_paid': total_paid,
+                        'is_completed': is_completed
                     })
 
         # Sort by EMI amount (highest first)
@@ -218,8 +312,14 @@ async def detect_loan_patterns(
             Transaction.user_id == current_user.user_id
         ).all()
 
-        income = sum(float(t.amount) for t in all_txns if t.type == 'credit')
-        expenses = sum(float(t.amount) for t in all_txns if t.type == 'debit'
+        # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+        income = sum(
+            float(t.amount) for t in all_txns 
+            if (t.type.value if hasattr(t.type, 'value') else t.type) == TransactionType.CREDIT.value
+        )
+        expenses = sum(
+            float(t.amount) for t in all_txns 
+            if (t.type.value if hasattr(t.type, 'value') else t.type) == TransactionType.DEBIT.value
                       and not any(p['source'] in str(t.description_raw or '').lower()
                                 for p in loan_patterns))
 
@@ -227,8 +327,23 @@ async def detect_loan_patterns(
         monthly_income = income / 3 if income > 0 else 100000
         monthly_expenses = expenses / 3 if expenses > 0 else 50000
 
+        # Convert loan_patterns to DetectedLoan models to ensure proper serialization
+        detected_loans = [
+            DetectedLoan(
+                source=p['source'],
+                avg_emi=p['avg_emi'],
+                count=p['count'],
+                txns=p.get('txns', []),
+                original_principal=p.get('original_principal'),
+                remaining_principal=p.get('remaining_principal'),
+                is_completed=p.get('is_completed', False),
+                total_paid=p.get('total_paid')
+            )
+            for p in loan_patterns
+        ]
+        
         return {
-            'detected_loans': loan_patterns,
+            'detected_loans': [loan.model_dump() if hasattr(loan, 'model_dump') else loan.dict() for loan in detected_loans],
             'monthly_income': monthly_income,
             'monthly_expenses': monthly_expenses
         }
@@ -266,15 +381,16 @@ async def calculate_prepayment_optimization(
         monthly_income = request.monthly_income
         monthly_expenses = request.monthly_expenses
 
-        # Calculate cash flow
-        total_monthly_emi = sum(loan.emi for loan in loans)
+        # Calculate cash flow (exclude completed loans)
+        active_loans = [loan for loan in loans if not loan.is_completed]
+        total_monthly_emi = sum(loan.emi for loan in active_loans)
         monthly_cash_flow = monthly_income - monthly_expenses - total_monthly_emi
 
-        # Scenario 1: No prepayment
+        # Scenario 1: No prepayment (only active loans)
         no_prepayment_loans = []
         total_interest_no_prepayment = 0
 
-        for loan in loans:
+        for loan in active_loans:
             result = calculate_loan_with_prepayment(
                 loan.remaining_principal,
                 loan.interest_rate,
@@ -290,12 +406,12 @@ async def calculate_prepayment_optimization(
             })
             total_interest_no_prepayment += result['total_interest']
 
-        # Scenario 2: Equal distribution
-        equal_prepayment_per_loan = annual_prepayment / len(loans) if loans else 0
+        # Scenario 2: Equal distribution (only active loans)
+        equal_prepayment_per_loan = annual_prepayment / len(active_loans) if active_loans else 0
         uniform_loans = []
         total_interest_uniform = 0
 
-        for loan in loans:
+        for loan in active_loans:
             result = calculate_loan_with_prepayment(
                 loan.remaining_principal,
                 loan.interest_rate,
@@ -317,8 +433,8 @@ async def calculate_prepayment_optimization(
             })
             total_interest_uniform += result['total_interest']
 
-        # Scenario 3: Optimized (prioritize high interest loans)
-        sorted_loans = sorted(loans, key=lambda x: x.interest_rate, reverse=True)
+        # Scenario 3: Optimized (prioritize high interest loans, only active loans)
+        sorted_loans = sorted(active_loans, key=lambda x: x.interest_rate, reverse=True)
         optimized_loans = []
         total_interest_optimized = 0
         remaining_prepayment = annual_prepayment
@@ -351,7 +467,7 @@ async def calculate_prepayment_optimization(
             total_interest_optimized += result['total_interest']
 
         # Sort back to original order
-        optimized_loans.sort(key=lambda x: next(i for i, l in enumerate(loans) if l.name == x['name']))
+        optimized_loans.sort(key=lambda x: next(i for i, l in enumerate(active_loans) if l.name == x['name']))
 
         # Calculate total tenure reduction
         total_tenure_reduction_uniform = sum(l['tenure_reduction'] for l in uniform_loans)

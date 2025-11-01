@@ -20,7 +20,7 @@ import math
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from storage.database import DatabaseManager
-from storage.models import User, Asset, Liability
+from storage.models import User, Asset, Liability, TransactionType
 from auth.dependencies import get_current_user
 from config import Config
 from utils.date_parser import parse_month_from_date
@@ -70,7 +70,9 @@ async def calculate_fire_runway(current_user: User = Depends(get_current_user)):
                 monthly_data[txn_month] = {'income': 0, 'expenses': 0, 'count': 0}
             
             monthly_data[txn_month]['count'] += 1
-            if txn.type == "credit":
+            # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+            txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+            if txn_type_value == TransactionType.CREDIT.value:
                 monthly_data[txn_month]['income'] += txn.amount
             else:
                 monthly_data[txn_month]['expenses'] += txn.amount

@@ -72,9 +72,30 @@ export default function LoanPrepaymentOptimizer() {
       } else {
         // Fallback to old detection if no saved loans
         const data = await detectLoanPatterns();
+        console.log('✅ Raw detected data:', data);
+        console.log('✅ First loan:', data.detected_loans?.[0]);
+        console.log('✅ Second loan:', data.detected_loans?.[1]);
+        
         setDetectedData(data);
         setMonthlyIncome(data.monthly_income || 100000);
         setMonthlyExpenses(data.monthly_expenses || 50000);
+        
+        // Automatically add all detected loans with principal data
+        if (data.detected_loans && data.detected_loans.length > 0) {
+          const initialLoans = data.detected_loans.map((detectedLoan, idx) => ({
+            loan_id: `loan_${Date.now()}_${idx}`,
+            name: detectedLoan.source,
+            source: detectedLoan.source,
+            emi: detectedLoan.avg_emi,
+            remaining_principal: detectedLoan.remaining_principal != null ? detectedLoan.remaining_principal : (detectedLoan.avg_emi * 100),
+            interest_rate: 10.0,
+            remaining_tenure_months: 60,
+            is_completed: detectedLoan.is_completed || false,
+            original_principal: detectedLoan.original_principal || null,
+            total_paid: detectedLoan.total_paid || null
+          }));
+          setLoans(initialLoans);
+        }
       }
     } catch (err) {
       console.error('Error loading loans:', err);
@@ -91,9 +112,12 @@ export default function LoanPrepaymentOptimizer() {
       name: detectedLoan.source,
       source: detectedLoan.source,
       emi: detectedLoan.avg_emi,
-      remaining_principal: 0,
+      remaining_principal: detectedLoan.remaining_principal != null ? detectedLoan.remaining_principal : (detectedLoan.avg_emi * 100),
       interest_rate: 10.0,
-      remaining_tenure_months: 60
+      remaining_tenure_months: 60,
+      is_completed: detectedLoan.is_completed || false,
+      original_principal: detectedLoan.original_principal || null,
+      total_paid: detectedLoan.total_paid || null
     };
     setLoans([...loans, newLoan]);
   };
@@ -104,7 +128,13 @@ export default function LoanPrepaymentOptimizer() {
 
   const handleUpdateLoan = (loanId, field, value) => {
     setLoans(loans.map(loan =>
-      loan.loan_id === loanId ? { ...loan, [field]: parseFloat(value) || 0 } : loan
+      loan.loan_id === loanId ? { ...loan, [field]: typeof value === 'boolean' ? value : (parseFloat(value) || 0) } : loan
+    ));
+  };
+
+  const handleToggleCompleted = (loanId) => {
+    setLoans(loans.map(loan =>
+      loan.loan_id === loanId ? { ...loan, is_completed: !loan.is_completed } : loan
     ));
   };
 
@@ -253,23 +283,55 @@ export default function LoanPrepaymentOptimizer() {
           <h4 className="text-sm font-semibold text-gray-700 mb-3">
             {detectedData.source === 'salary_sweep' ? '💰 Your Saved Loan EMIs' : '✓ Detected Recurring EMIs'}
           </h4>
-          {detectedData.detected_loans.map((detected, idx) => (
-            <div key={idx} className="flex items-center justify-between py-2 border-b last:border-b-0">
-              <div>
-                <div className="text-sm font-medium">{detected.source}</div>
-                <div className="text-xs text-gray-500">
-                  {formatCurrency(detected.avg_emi)}/month · {detected.count} payments detected
+          {detectedData.detected_loans.map((detected, idx) => {
+            console.log(`🎨 Rendering detected loan ${idx}:`, {
+              source: detected.source,
+              is_completed: detected.is_completed,
+              original_principal: detected.original_principal,
+              remaining_principal: detected.remaining_principal
+            });
+            
+            return (
+              <div key={idx} className="flex items-center justify-between py-2 border-b last:border-b-0">
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <div className="text-sm font-medium">{detected.source}</div>
+                    {detected.is_completed === true && (
+                      <span className="px-2 py-0.5 text-xs bg-green-100 text-green-700 rounded-full font-medium">
+                        ✅ Completed
+                      </span>
+                    )}
+                    {detected.is_completed === false && detected.remaining_principal != null && detected.remaining_principal > 0 && (
+                      <span className="px-2 py-0.5 text-xs bg-orange-100 text-orange-700 rounded-full font-medium">
+                        ⏳ Active
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs text-gray-500 mt-1">
+                    {formatCurrency(detected.avg_emi)}/month · {detected.count} payments
+                  </div>
+                  {(detected.remaining_principal != null || detected.original_principal != null) && (
+                    <div className="text-xs font-semibold text-gray-700 mt-1">
+                      {detected.remaining_principal != null ? (
+                        detected.remaining_principal > 0 
+                          ? `Principal: ₹${Math.round(detected.remaining_principal).toLocaleString('en-IN')} remaining`
+                          : `✅ Paid Off`
+                      ) : (
+                        detected.original_principal != null && `Principal: ₹${Math.round(detected.original_principal).toLocaleString('en-IN')}`
+                      )}
+                    </div>
+                  )}
                 </div>
+                <button
+                  onClick={() => handleAddLoan(detected)}
+                  disabled={loans.some(l => l.source === detected.source)}
+                  className="px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
+                >
+                  {loans.some(l => l.source === detected.source) ? 'Added' : '+ Add'}
+                </button>
               </div>
-              <button
-                onClick={() => handleAddLoan(detected)}
-                disabled={loans.some(l => l.source === detected.source)}
-                className="px-3 py-1 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:bg-gray-300 disabled:cursor-not-allowed"
-              >
-                {loans.some(l => l.source === detected.source) ? 'Added' : '+ Add'}
-              </button>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -278,7 +340,42 @@ export default function LoanPrepaymentOptimizer() {
         <div className="mb-6 space-y-3">
           <h4 className="text-sm font-semibold text-gray-700">Your Loans</h4>
           {loans.map((loan) => (
-            <div key={loan.loan_id} className="bg-white rounded-lg p-4">
+            <div key={loan.loan_id} className={`bg-white rounded-lg p-4 border-2 ${loan.is_completed ? 'border-green-300 bg-green-50' : 'border-gray-200'}`}>
+              {/* Principal Display at Top */}
+              {loan.remaining_principal != null || loan.original_principal != null ? (
+                <div className={`mb-3 p-3 rounded-lg ${loan.is_completed ? 'bg-green-100 border border-green-300' : 'bg-orange-50 border border-orange-200'}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs text-gray-600 mb-1">Remaining Principal</div>
+                      <div className={`text-lg font-bold ${loan.is_completed ? 'text-green-700' : 'text-orange-700'}`}>
+                        {loan.remaining_principal != null ? (
+                          loan.remaining_principal > 0 
+                            ? `₹${Math.round(loan.remaining_principal).toLocaleString('en-IN')}`
+                            : `✅ Paid Off`
+                        ) : (
+                          loan.original_principal != null && `₹${Math.round(loan.original_principal).toLocaleString('en-IN')}`
+                        )}
+                      </div>
+                      {loan.original_principal && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          Original: ₹{Math.round(loan.original_principal).toLocaleString('en-IN')}
+                        </div>
+                      )}
+                    </div>
+                    <button
+                      onClick={() => handleToggleCompleted(loan.loan_id)}
+                      className={`px-3 py-1.5 text-xs rounded-lg font-medium ${
+                        loan.is_completed 
+                          ? 'bg-green-600 text-white hover:bg-green-700' 
+                          : 'bg-orange-600 text-white hover:bg-orange-700'
+                      }`}
+                    >
+                      {loan.is_completed ? '✅ Completed' : '⏳ Mark Complete'}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              
               <div className="flex items-center justify-between mb-3">
                 <h5 className="font-semibold text-gray-900">{loan.name}</h5>
                 <button
@@ -296,7 +393,7 @@ export default function LoanPrepaymentOptimizer() {
                     value={loan.emi}
                     onChange={(e) => handleUpdateLoan(loan.loan_id, 'emi', e.target.value)}
                     className="w-full p-2 border rounded text-sm"
-                    disabled
+                    disabled={loan.is_completed}
                   />
                 </div>
                 <div>
@@ -305,8 +402,9 @@ export default function LoanPrepaymentOptimizer() {
                     type="number"
                     value={loan.remaining_principal}
                     onChange={(e) => handleUpdateLoan(loan.loan_id, 'remaining_principal', e.target.value)}
-                    className="w-full p-2 border rounded text-sm"
+                    className={`w-full p-2 border rounded text-sm ${loan.is_completed ? 'bg-gray-100' : ''}`}
                     placeholder="e.g., 2500000"
+                    disabled={loan.is_completed}
                   />
                 </div>
                 <div>
@@ -316,8 +414,9 @@ export default function LoanPrepaymentOptimizer() {
                     step="0.1"
                     value={loan.interest_rate}
                     onChange={(e) => handleUpdateLoan(loan.loan_id, 'interest_rate', e.target.value)}
-                    className="w-full p-2 border rounded text-sm"
+                    className={`w-full p-2 border rounded text-sm ${loan.is_completed ? 'bg-gray-100' : ''}`}
                     placeholder="e.g., 8.5"
+                    disabled={loan.is_completed}
                   />
                 </div>
                 <div>
@@ -326,11 +425,17 @@ export default function LoanPrepaymentOptimizer() {
                     type="number"
                     value={loan.remaining_tenure_months}
                     onChange={(e) => handleUpdateLoan(loan.loan_id, 'remaining_tenure_months', e.target.value)}
-                    className="w-full p-2 border rounded text-sm"
+                    className={`w-full p-2 border rounded text-sm ${loan.is_completed ? 'bg-gray-100' : ''}`}
                     placeholder="e.g., 180"
+                    disabled={loan.is_completed}
                   />
                 </div>
               </div>
+              {loan.is_completed && (
+                <div className="mt-3 p-2 bg-green-50 border border-green-200 rounded text-xs text-green-700">
+                  ✅ This loan is marked as completed and will be excluded from prepayment calculations
+                </div>
+              )}
             </div>
           ))}
         </div>

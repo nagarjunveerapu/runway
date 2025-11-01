@@ -163,7 +163,9 @@ async def health_check():
 # ============================================================================
 
 # Import route modules
-from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, fire_calculator, dashboard, emergency_fund, investment_optimizer, net_worth_timeline, credit_cards
+from api.routes import transactions, analytics, ml_categorization, upload, upload_categorize, upload_categorize_v2, upload_v2_service, auth, assets, liquidations, liabilities, accounts, salary_sweep_v2, loan_prepayment, dashboard, investment_optimizer, net_worth_timeline, credit_cards
+# DISABLED: fire_calculator, emergency_fund (commented out to remove from UI, code preserved)
+# from api.routes import fire_calculator, emergency_fund
 
 # Register routers
 app.include_router(
@@ -250,11 +252,12 @@ app.include_router(
     tags=["Loan Prepayment Optimizer"]
 )
 
-app.include_router(
-    fire_calculator.router,
-    prefix="/api/v1/fire",
-    tags=["FIRE Calculator"]
-)
+# DISABLED: FIRE Calculator (removed from UI, code preserved)
+# app.include_router(
+#     fire_calculator.router,
+#     prefix="/api/v1/fire",
+#     tags=["FIRE Calculator"]
+# )
 
 app.include_router(
     dashboard.router,
@@ -262,11 +265,12 @@ app.include_router(
     tags=["Dashboard"]
 )
 
-app.include_router(
-    emergency_fund.router,
-    prefix="/api/v1/emergency-fund",
-    tags=["Emergency Fund Health Check"]
-)
+# DISABLED: Emergency Fund (removed from UI, code preserved)
+# app.include_router(
+#     emergency_fund.router,
+#     prefix="/api/v1/emergency-fund",
+#     tags=["Emergency Fund Health Check"]
+# )
 
 app.include_router(
     investment_optimizer.router,

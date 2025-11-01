@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from auth.dependencies import get_current_user
-from storage.models import User, Asset, Transaction
+from storage.models import User, Asset, Transaction, TransactionType
 from storage.database import DatabaseManager
 from config import Config
 from datetime import datetime
@@ -47,7 +47,7 @@ async def get_emergency_fund_health(
             
             expenses = session.query(Transaction).filter(
                 Transaction.user_id == current_user.user_id,
-                Transaction.type == 'debit',
+                Transaction.type == TransactionType.DEBIT,
                 Transaction.date >= six_months_ago
             ).all()
         finally:

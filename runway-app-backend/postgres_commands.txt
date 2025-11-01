@@ -1,0 +1,128 @@
+═══════════════════════════════════════════════════════════════
+PostgreSQL Manual Login & Commands
+═══════════════════════════════════════════════════════════════
+
+📌 SETUP PATH FIRST:
+export PATH="/opt/homebrew/opt/postgresql@16/bin:$PATH"
+
+═══════════════════════════════════════════════════════════════
+🔐 INTERACTIVE LOGIN
+═══════════════════════════════════════════════════════════════
+
+# Method 1: Connect to runway_finance database
+psql -d runway_finance
+
+# Method 2: Connect as specific user
+psql -U runway_user -d runway_finance
+
+# Method 3: Connect to main postgres database
+psql -d postgres
+
+═══════════════════════════════════════════════════════════════
+📋 USEFUL COMMANDS (Inside psql)
+═══════════════════════════════════════════════════════════════
+
+# List databases
+\l
+
+# Connect to a database
+\c runway_finance
+
+# List all tables
+\dt
+
+# Describe a table structure
+\d transactions
+\d users
+\d accounts
+
+# List tables with sizes
+\dt+
+
+# Show column details
+\d+ transactions
+
+# Execute a query
+SELECT * FROM users LIMIT 5;
+
+# Exit psql
+\q
+
+═══════════════════════════════════════════════════════════════
+🔍 QUICK ONE-LINE COMMANDS
+═══════════════════════════════════════════════════════════════
+
+# List all databases
+psql -d postgres -c "SELECT datname FROM pg_database WHERE datistemplate = false;"
+
+# List all users
+psql -d postgres -c "SELECT usename, usesuper FROM pg_user;"
+
+# Count users
+psql -d runway_finance -c "SELECT COUNT(*) FROM users;"
+
+# View all transactions
+psql -d runway_finance -c "SELECT * FROM transactions LIMIT 10;"
+
+# Count transactions by category
+psql -d runway_finance -c "SELECT category, COUNT(*) FROM transactions GROUP BY category;"
+
+# View account summary
+psql -d runway_finance -c "SELECT account_name, account_type, balance FROM accounts;"
+
+═══════════════════════════════════════════════════════════════
+🖥️ GUI TOOLS
+═══════════════════════════════════════════════════════════════
+
+# Install pgAdmin (Official PostgreSQL GUI)
+brew install --cask pgadmin4
+
+# Install DBeaver (Universal Database Tool)
+brew install --cask dbeaver-community
+
+═══════════════════════════════════════════════════════════════
+📝 CONNECTION DETAILS FOR GUI TOOLS
+═══════════════════════════════════════════════════════════════
+
+Host:      localhost
+Port:      5432
+Database:  runway_finance
+Username:  runway_user
+Password:  runway_password
+
+Connection String:
+postgresql://runway_user:runway_password@localhost:5432/runway_finance
+
+═══════════════════════════════════════════════════════════════
+🔧 MANAGEMENT COMMANDS
+═══════════════════════════════════════════════════════════════
+
+# Check if PostgreSQL is running
+psql -d postgres -c "SELECT version();"
+
+# Start PostgreSQL
+brew services start postgresql@16
+
+# Stop PostgreSQL
+brew services stop postgresql@16
+
+# Check PostgreSQL status
+brew services list | grep postgres
+
+# View PostgreSQL logs
+tail -f /opt/homebrew/var/log/postgresql@16.log
+
+═══════════════════════════════════════════════════════════════
+⚡ QUICK EXAMPLE SESSION
+═══════════════════════════════════════════════════════════════
+
+psql -d runway_finance
+
+-- Inside psql:
+\l                    -- List all databases
+\dt                   -- List all tables
+\d transactions       -- Describe transactions table
+SELECT * FROM users;  -- Query users
+\q                    -- Exit
+
+═══════════════════════════════════════════════════════════════

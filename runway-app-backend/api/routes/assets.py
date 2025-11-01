@@ -16,7 +16,7 @@ from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from storage.models import Asset, User, Transaction
+from storage.models import Asset, User, Transaction, TransactionType
 from storage.database import DatabaseManager
 from auth.dependencies import get_current_user, get_db
 from config import Config
@@ -61,7 +61,7 @@ async def detect_assets_from_emis(
         # Get all transactions for the user
         transactions = session.query(Transaction).filter(
             Transaction.user_id == current_user.user_id,
-            Transaction.type == "debit"
+            Transaction.type == TransactionType.DEBIT
         ).all()
 
         # Group by merchant and amount to find recurring patterns

@@ -223,7 +223,8 @@ class ParserService:
             # Step 5: Enrich transactions
             logger.info("\n[STEP 5] ✨ ENRICHMENT SERVICE: Enriching transactions...")
             # Add source information
-            source = 'pdf_upload' if file.filename.lower().endswith('.pdf') else 'csv_upload'
+            from storage.models import TransactionSource
+            source = TransactionSource.PDF.value if file.filename.lower().endswith('.pdf') else TransactionSource.CSV.value
             for txn in transactions:
                 txn['source'] = source
             

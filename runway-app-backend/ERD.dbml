@@ -1,0 +1,302 @@
+// Runway Finance - Database Schema in DBML Format
+// Use this file with https://dbdiagram.io to generate visual ERD
+
+Project RunwayFinance {
+  database_type: 'PostgreSQL'
+  Note: 'Runway Finance Personal Finance Application Database Schema'
+}
+
+// Core User Entity
+Table users {
+  user_id varchar(36) [pk]
+  username varchar(100) [unique, not null]
+  email varchar(255) [unique, not null]
+  password_hash varchar(255) [not null]
+  is_active boolean [default: true]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  Note: 'Central entity for multi-user support'
+}
+
+// Bank Accounts
+Table accounts {
+  account_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  account_number_ref varchar(64)
+  account_type varchar(50)
+  bank_name varchar(100)
+  account_name varchar(255)
+  currency varchar(10) [default: 'INR']
+  current_balance float
+  is_active boolean [default: true]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  Note: 'Bank accounts - account numbers stored in vault for security'
+}
+
+// Canonical Merchants
+Table merchants {
+  merchant_id varchar(64) [pk]
+  merchant_canonical varchar(255) [unique, not null]
+  category varchar(100)
+  transaction_count integer [default: 0]
+  total_amount float [default: 0.0]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  Note: 'Canonical merchant mapping with statistics'
+}
+
+// Transactions (Canonical Schema)
+Table transactions {
+  transaction_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  account_id varchar(36) [ref: - accounts.account_id]
+  merchant_id varchar(64) [ref: - merchants.merchant_id]
+  
+  // Core fields
+  date varchar(10) [not null]
+  timestamp timestamp
+  amount float [not null]
+  type varchar(10) [not null]
+  description_raw text
+  clean_description text
+  
+  // Merchant (denormalized)
+  merchant_raw varchar(255)
+  merchant_canonical varchar(255)
+  
+  // Categorization
+  category varchar(100)
+  transaction_sub_type varchar(100)
+  labels json
+  confidence float
+  
+  // Financial
+  balance float
+  currency varchar(10) [default: 'INR']
+  original_amount float
+  original_currency varchar(10)
+  
+  // Deduplication
+  duplicate_of varchar(36)
+  duplicate_count integer [default: 0]
+  is_duplicate boolean [default: false]
+  
+  // Source tracking
+  source varchar(50)
+  bank_name varchar(100)
+  statement_period varchar(50)
+  ingestion_timestamp timestamp [default: `now()`]
+  extra_metadata json
+  
+  // FIRE integration
+  linked_asset_id varchar(36)
+  liquidation_event_id varchar(36)
+  month varchar(7)
+  
+  // Recurring patterns
+  is_recurring boolean [default: false]
+  recurring_type varchar(20)
+  recurring_group_id varchar(36)
+  
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  indexes {
+    (user_id, date) [name: 'idx_user_date']
+    (user_id, category) [name: 'idx_user_category']
+    (date, category) [name: 'idx_date_category']
+    (merchant_canonical, date) [name: 'idx_merchant_date']
+    (user_id, month) [name: 'idx_user_month']
+    date [name: 'idx_date']
+    category [name: 'idx_category']
+    merchant_canonical [name: 'idx_merchant']
+    is_recurring [name: 'idx_recurring']
+  }
+  
+  Note: 'Canonical transaction schema with ML categorization and deduplication'
+}
+
+// Assets (FIRE)
+Table assets {
+  asset_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  name varchar(255) [not null]
+  asset_type varchar(100)
+  quantity float
+  purchase_price float
+  current_value float
+  purchase_date timestamp
+  recurring_pattern_id varchar(36)
+  liquid boolean [default: false]
+  disposed boolean [default: false]
+  notes text
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  indexes {
+    user_id [name: 'idx_asset_user']
+    recurring_pattern_id [name: 'idx_asset_recurring_pattern']
+  }
+  
+  Note: 'Investments and assets for FIRE tracking'
+}
+
+// Liquidations
+Table liquidations {
+  liquidation_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  asset_id varchar(36) [not null]
+  date varchar(10) [not null]
+  gross_proceeds float
+  fees float [default: 0.0]
+  net_received float
+  quantity_sold float
+  notes text
+  created_at timestamp [default: `now()`]
+  
+  indexes {
+    (user_id, asset_id) [name: 'idx_liquidation_user']
+  }
+  
+  Note: 'Asset liquidation events'
+}
+
+// Liabilities
+Table liabilities {
+  liability_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  name varchar(255) [not null]
+  liability_type varchar(100)
+  principal_amount float
+  outstanding_balance float
+  interest_rate float
+  emi_amount float
+  rate_type varchar(20)
+  rate_reset_frequency_months integer
+  processing_fee float
+  prepayment_penalty_pct float
+  original_tenure_months integer
+  remaining_tenure_months integer
+  recurring_pattern_id varchar(36)
+  start_date timestamp
+  end_date timestamp
+  last_rate_reset_date timestamp
+  moratorium_months integer
+  lender_name varchar(255)
+  status varchar(20) [default: 'active']
+  closure_date timestamp
+  closure_reason varchar(255)
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  indexes {
+    user_id [name: 'idx_liability_user']
+    recurring_pattern_id [name: 'idx_liability_pattern']
+  }
+  
+  Note: 'Loans, EMIs, and debts'
+}
+
+// Credit Card Statements
+Table credit_card_statements {
+  statement_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  account_id varchar(36) [ref: - accounts.account_id]
+  bank_name varchar(100) [not null]
+  card_number_masked varchar(50)
+  card_last_4_digits varchar(4)
+  customer_name varchar(255)
+  statement_start_date varchar(10)
+  statement_end_date varchar(10)
+  billing_period varchar(50)
+  total_transactions integer [default: 0]
+  transactions_processed integer [default: 0]
+  source_file varchar(255)
+  source_type varchar(20)
+  is_processed boolean [default: false]
+  processing_status varchar(50)
+  error_message text
+  extra_metadata json
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  indexes {
+    account_id [name: 'idx_account']
+    card_last_4_digits [name: 'idx_card_last_4']
+  }
+  
+  Note: 'Credit card statement metadata tracking'
+}
+
+// Salary Sweep Configuration
+Table salary_sweep_configs {
+  config_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null, unique]
+  salary_source varchar(255)
+  salary_amount float
+  salary_account_rate float [default: 2.5]
+  savings_account_rate float [default: 7.0]
+  selected_scenario varchar(50)
+  monthly_interest_saved float
+  annual_interest_saved float
+  optimization_data json
+  is_active boolean [default: true]
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  Note: 'Salary sweep optimizer configuration'
+}
+
+// Detected EMI Patterns
+Table detected_emi_patterns {
+  pattern_id varchar(36) [pk]
+  config_id varchar(36) [ref: > salary_sweep_configs.config_id, not null]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  merchant_source varchar(255) [not null]
+  emi_amount float [not null]
+  occurrence_count integer [default: 0]
+  category varchar(50)
+  subcategory varchar(100)
+  is_confirmed boolean [default: false]
+  user_label varchar(255)
+  suggested_action varchar(50)
+  suggestion_reason text
+  transaction_ids json
+  first_detected_date varchar(10)
+  last_detected_date varchar(10)
+  created_at timestamp [default: `now()`]
+  updated_at timestamp [default: `now()`]
+  
+  indexes {
+    category [name: 'idx_category']
+  }
+  
+  Note: 'Auto-detected recurring payment patterns'
+}
+
+// Net Worth Snapshots
+Table net_worth_snapshots {
+  snapshot_id varchar(36) [pk]
+  user_id varchar(36) [ref: > users.user_id, not null]
+  snapshot_date varchar(10) [not null]
+  month varchar(7) [not null]
+  total_assets float [default: 0.0]
+  total_liabilities float [default: 0.0]
+  net_worth float [default: 0.0]
+  liquid_assets float [default: 0.0]
+  asset_breakdown json
+  liability_breakdown json
+  created_at timestamp [default: `now()`]
+  
+  indexes {
+    (user_id, month) [name: 'idx_net_worth_user_month', unique]
+    month [name: 'idx_month']
+  }
+  
+  Note: 'Monthly net worth snapshots for timeline'
+}
+

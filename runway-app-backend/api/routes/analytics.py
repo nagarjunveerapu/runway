@@ -20,7 +20,7 @@ from api.models.schemas import (
     AnalyticsResponse
 )
 from storage.database import DatabaseManager
-from storage.models import User
+from storage.models import User, TransactionType, TransactionCategory
 from auth.dependencies import get_current_user
 from config import Config
 
@@ -92,19 +92,23 @@ async def get_category_breakdown(
         category_counts = defaultdict(int)
         
         for txn in transactions:
-            # Skip EMI-converted transactions (these were converted from purchase to EMI)
+            # Include all transactions (EMI-converted transactions are now included)
+            # Note: EMI-converted transactions are typically large purchases that were
+            # converted to EMI, so including them gives a complete picture of spending
             extra_metadata = txn.extra_metadata or {}
-            if extra_metadata.get('emi_converted'):
-                continue
+            # if extra_metadata.get('emi_converted'):
+            #     continue  # COMMENTED OUT: Now including EMI-converted transactions
             
             category = txn.category or "Unknown"
             merchant = txn.merchant_canonical or "Unknown"
             key = (category, merchant)
             
-            if txn.type == 'debit':
+            # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+            txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+            if txn_type_value == TransactionType.DEBIT.value:
                 category_merchant_totals[key]['debit'] += txn.amount
                 category_counts[category] += 1
-            elif txn.type == 'credit':
+            elif txn_type_value == TransactionType.CREDIT.value:
                 category_merchant_totals[key]['credit'] += txn.amount
 
         # Calculate net totals per category (debit - credit)
@@ -164,24 +168,32 @@ async def get_top_merchants(
             end_date=end_date
         )
 
-        # Calculate merchant totals
-        merchant_totals = defaultdict(lambda: {'total': 0.0, 'count': 0})
+        # Calculate merchant totals with debit/credit netting
+        merchant_totals = defaultdict(lambda: {'debit': 0.0, 'credit': 0.0, 'count': 0})
 
         for txn in transactions:
-            if txn.type == 'debit' and txn.merchant_canonical:  # Only debits
+            # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+            txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+            if txn.merchant_canonical:
                 merchant = txn.merchant_canonical
-                merchant_totals[merchant]['total'] += txn.amount
-                merchant_totals[merchant]['count'] += 1
+                if txn_type_value == TransactionType.DEBIT.value:
+                    merchant_totals[merchant]['debit'] += txn.amount
+                    merchant_totals[merchant]['count'] += 1
+                elif txn_type_value == TransactionType.CREDIT.value:
+                    merchant_totals[merchant]['credit'] += txn.amount
 
-        # Convert to response format
-        top_merchants = [
-            TopMerchant(
-                merchant=merchant,
-                total_spend=round(data['total'], 2),
-                transaction_count=data['count']
-            )
-            for merchant, data in merchant_totals.items()
-        ]
+        # Convert to response format with net spending (debit - credit)
+        top_merchants = []
+        for merchant, data in merchant_totals.items():
+            net_amount = data['debit'] - data['credit']
+            if net_amount > 0:  # Only include merchants with positive net spending
+                top_merchants.append(
+                    TopMerchant(
+                        merchant=merchant,
+                        total_spend=round(net_amount, 2),
+                        transaction_count=data['count']
+                    )
+                )
 
         # Sort by total spend and limit
         top_merchants.sort(key=lambda x: x.total_spend, reverse=True)
@@ -234,7 +246,9 @@ async def get_monthly_trends(
 
             monthly_data[month]['transactions'] += 1
 
-            if txn.type == 'credit':
+            # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+            txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+            if txn_type_value == TransactionType.CREDIT.value:
                 monthly_data[month]['income'] += txn.amount
             else:  # debit
                 monthly_data[month]['expenses'] += txn.amount
@@ -317,34 +331,57 @@ async def get_comprehensive_analytics(
             end_date=end_date
         )
 
-        # Category breakdown
-        category_totals = defaultdict(lambda: {'count': 0, 'total': 0.0})
-        merchant_totals = defaultdict(lambda: {'total': 0.0, 'count': 0})
-        total_debit = 0.0
-
+        # Category breakdown with debit/credit netting
+        category_merchant_totals = defaultdict(lambda: {'debit': 0.0, 'credit': 0.0})
+        category_counts = defaultdict(int)
+        
         for txn in transactions:
-            if txn.type == 'debit':
-                # Skip EMI-converted transactions (these were converted from purchase to EMI)
-                extra_metadata = txn.extra_metadata or {}
-                if extra_metadata.get('emi_converted'):
-                    continue
-                
-                # Category
-                category = txn.category or "Unknown"
-                category_totals[category]['count'] += 1
-                category_totals[category]['total'] += txn.amount
-                total_debit += txn.amount
-
-                # Merchant
-                if txn.merchant_canonical:
-                    merchant = txn.merchant_canonical
-                    merchant_totals[merchant]['total'] += txn.amount
+            # Include all transactions (EMI-converted transactions are now included)
+            # extra_metadata = txn.extra_metadata or {}
+            # if extra_metadata.get('emi_converted'):
+            #     continue  # COMMENTED OUT: Now including EMI-converted transactions
+            
+            category = txn.category or "Unknown"
+            merchant = txn.merchant_canonical or "Unknown"
+            key = (category, merchant)
+            
+            # Handle ENUM comparison (works for both ENUM and string for backward compatibility)
+            txn_type_value = txn.type.value if hasattr(txn.type, 'value') else txn.type
+            if txn_type_value == TransactionType.DEBIT.value:
+                category_merchant_totals[key]['debit'] += txn.amount
+                category_counts[category] += 1
+            elif txn_type_value == TransactionType.CREDIT.value:
+                category_merchant_totals[key]['credit'] += txn.amount
+        
+        # Calculate net totals per category (debit - credit)
+        category_totals = defaultdict(lambda: {'count': 0, 'total': 0.0})
+        merchant_totals = defaultdict(lambda: {'debit': 0.0, 'credit': 0.0, 'count': 0})
+        total_debit = 0.0
+        total_credit = 0.0
+        
+        for (category, merchant), amounts in category_merchant_totals.items():
+            net_amount = amounts['debit'] - amounts['credit']
+            
+            # Track for merchant totals
+            if merchant != "Unknown":
+                merchant_totals[merchant]['debit'] += amounts['debit']
+                merchant_totals[merchant]['credit'] += amounts['credit']
+                if amounts['debit'] > 0:
                     merchant_totals[merchant]['count'] += 1
+            
+            total_debit += amounts['debit']
+            total_credit += amounts['credit']
+            
+            # Category totals (only positive net)
+            if net_amount > 0:
+                category_totals[category]['total'] += net_amount
+                category_totals[category]['count'] = category_counts[category]
 
         # Build category breakdown
         category_breakdown = []
         for category, data in category_totals.items():
-            percentage = (data['total'] / total_debit * 100) if total_debit > 0 else 0
+            total_net = sum(ct['total'] for ct in category_totals.values())
+            percentage = (data['total'] / total_net * 100) if total_net > 0 else 0
             category_breakdown.append(CategoryBreakdown(
                 category=category,
                 count=data['count'],
@@ -353,15 +390,18 @@ async def get_comprehensive_analytics(
             ))
         category_breakdown.sort(key=lambda x: x.total_amount, reverse=True)
 
-        # Build top merchants
-        top_merchants = [
-            TopMerchant(
-                merchant=merchant,
-                total_spend=round(data['total'], 2),
-                transaction_count=data['count']
-            )
-            for merchant, data in merchant_totals.items()
-        ]
+        # Build top merchants with net spending (debit - credit)
+        top_merchants = []
+        for merchant, data in merchant_totals.items():
+            net_amount = data['debit'] - data['credit']
+            if net_amount > 0:  # Only include merchants with positive net spending
+                top_merchants.append(
+                    TopMerchant(
+                        merchant=merchant,
+                        total_spend=round(net_amount, 2),
+                        transaction_count=data['count']
+                    )
+                )
         top_merchants.sort(key=lambda x: x.total_spend, reverse=True)
         top_merchants = top_merchants[:10]
 
